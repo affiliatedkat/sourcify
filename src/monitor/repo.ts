@@ -1,11 +1,11 @@
 import Logger from "bunyan";
 
-type FileFetcher = (hash: string) => Promise<string>;
+type FileFetcher = (url: string) => Promise<string>;
 
 type FetchCallback= (fetchedFile: string) => any;
 
 declare interface Subscriptions {
-    [hash: string]: Array<FetchCallback>;
+    [url: string]: Array<FetchCallback>;
 }
 
 export default class Repo {
@@ -19,25 +19,25 @@ export default class Repo {
     }
 
     private fetch(): void {
-        for (const hash in this.subscriptions) {
-            this.fetcher(hash).then(file => {
-                this.notifySubscribers(hash, file);
+        for (const url in this.subscriptions) {
+            this.fetcher(url).then(file => {
+                this.notifySubscribers(url, file);
             }).catch(err => {
                 this.logger.error(err);
             });
         }
     }
 
-    private notifySubscribers(hash: string, file: string) {
-        const callbacks = this.subscriptions[hash];
+    private notifySubscribers(url: string, file: string) {
+        const callbacks = this.subscriptions[url];
         callbacks.forEach(callback => callback(file));
     }
 
-    subscribe(hash: string, callback: FetchCallback) {
-        if (!(hash in this.subscriptions)) {
-            this.subscriptions[hash] = [];
+    subscribe(url: string, callback: FetchCallback) {
+        if (!(url in this.subscriptions)) {
+            this.subscriptions[url] = [];
         }
 
-        this.subscriptions[hash].push(callback);
+        this.subscriptions[url].push(callback);
     }
 }

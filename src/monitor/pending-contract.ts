@@ -3,8 +3,9 @@ import Repo from './repo';
 import { Injector } from '@ethereum-sourcify/verification';
 import { ValidationService } from '@ethereum-sourcify/validation';
 import Logger from 'bunyan';
+import Web3 from 'web3';
 
-type SourceInfo = { keccak256: string, urls: string[] };
+type SourceInfo = { keccak256: string, urls: string[], name: string };
 interface SourceInfoMap {
     [name: string]: SourceInfo;
 }
@@ -38,18 +39,27 @@ export default class PendingContract {
 
     private addMetadata = (rawMetadata: string) => {
         const metadata: Metadata = JSON.parse(rawMetadata);
-        this.pendingSources = metadata.sources;
-        for (const name in this.pendingSources) {
-            const source = this.pendingSources[name];
-            this.sourceRepo.subscribe(source.keccak256, this.addFetchedSource);
+        this.pendingSources = {};
+        for (const name in metadata.sources) {
+            const source = metadata.sources[name];
+            source.name = name;
+            this.pendingSources[source.keccak256] = source;
+
+            for (const url of source.urls) { // TODO make this more efficient; this might leave unnecessary subscriptions hanging
+                this.sourceRepo.subscribe(url, this.addFetchedSource);
+            }
+
         }
     }
 
     private addFetchedSource = (source: string) => {
-        const deleted = delete this.pendingSources[name];
+        const hash = Web3.utils.keccak256(source);
+        const deleted = delete this.pendingSources[hash];
 
         if (!deleted) {
-            throw new Error(`Attempted adding of a nonrequired source (${name}) to contract (${this.address})`);
+            const msg = `Attempted addition of a nonrequired source (${hash}) to contract (${this.address})`;
+            this.logger.error({ loc: "[PENDING_CONTRACT]", hash, address: this.address }, msg)
+            throw new Error(msg);
         }
 
         this.fetchedSources[name] = source;
