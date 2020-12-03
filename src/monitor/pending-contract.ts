@@ -17,24 +17,21 @@ export default class PendingContract {
     private bytecode: string;
     private pendingSources: SourceInfoMap;
     private fetchedSources: StringMap;
-    private sourceRepo: Repo;
-    private metadataRepo: Repo;
+    private repo;
     private injector: Injector;
     private logger = new Logger({ name: "Pending Contract" });
 
     // TODO too many parameters - switch to single object
     // TODO injector - one instance per pending contract
-    constructor(chain: string, address: string, bytecode: string, metadataHash: string, metadataRepo: Repo, sourceRepo: Repo, injector: Injector) {
+    constructor(chain: string, address: string, bytecode: string, metadataHash: string, repo: Repo, injector: Injector) {
         this.chain = chain;
         this.address = address;
         this.bytecode = bytecode;
         
-        this.metadataRepo = metadataRepo;
-        this.sourceRepo = sourceRepo;
+        this.repo = repo;
+        this.repo.subscribe(metadataHash, this.addMetadata);
 
         this.injector = injector;
-
-        this.metadataRepo.subscribe(metadataHash, this.addMetadata);
     }
 
     private addMetadata = (rawMetadata: string) => {
@@ -46,7 +43,7 @@ export default class PendingContract {
             this.pendingSources[source.keccak256] = source;
 
             for (const url of source.urls) { // TODO make this more efficient; this might leave unnecessary subscriptions hanging
-                this.sourceRepo.subscribe(url, this.addFetchedSource);
+                this.repo.subscribe(url, this.addFetchedSource);
             }
 
         }

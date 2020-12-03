@@ -1,5 +1,5 @@
+import Repo from "./repo";
+
 export class Monitor {
-    constructor() {
-        
-    }
+    private repo = new Repo();
 }
