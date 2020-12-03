@@ -55,7 +55,7 @@ export default class PendingContract {
 
         if (!deleted) {
             const msg = `Attempted addition of a nonrequired source (${hash}) to contract (${this.address})`;
-            this.logger.error({ loc: "[PENDING_CONTRACT]", hash, address: this.address }, msg)
+            this.logger.error({ loc: "[PENDING_CONTRACT]", hash, address: this.address }, msg);
             throw new Error(msg);
         }
 

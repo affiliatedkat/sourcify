@@ -12,17 +12,31 @@ declare interface Subscriptions {
 const IPFS_PREFIX = "dweb:/ipfs/";
 const IPFS_BASE_URL = "https://ipfs.infura.io:5001/api/v0/cat?arg=";
 
+const SWARM_PREFIX = ""; // TODO
+
 export default class Repo {
     private subscriptions: Subscriptions;
-    private logger = new Logger({ name: "Repo" }); // TODO what kind of Repo?
+    private logger = new Logger({ name: "Repo" });
 
     constructor(refreshInterval = 15) {
-        setInterval(this.fetch.bind(this), refreshInterval * 1000);
+        setInterval(this.fetch, refreshInterval * 1000);
     }
 
-    private fetch(): void {
+    private fetch = (): void => {
         for (const url in this.subscriptions) {
-            this.performFetch(url).then(file => {
+            let fetchArg = null;
+            if (url.startsWith(IPFS_PREFIX)) {
+                fetchArg = url.split(IPFS_PREFIX)[1];
+            } 
+            // TODO else if
+            else {
+                this.logger.error({ loc: "[REPO]", url }, "URL points to an unknown origin.");
+                break;
+            }
+
+            nodeFetch(IPFS_BASE_URL + fetchArg).then(resp => {
+                return resp.text();
+            }).then(file => {
                 this.notifySubscribers(url, file);
             }).catch(err => {
                 this.logger.error(err.message);
@@ -30,19 +44,9 @@ export default class Repo {
         }
     }
 
-    private async performFetch(url: string): Promise<string> {
-        if (url.startsWith(IPFS_PREFIX)) {
-            const ipfsArg = url.split(IPFS_PREFIX)[1];
-            return nodeFetch(IPFS_BASE_URL + ipfsArg).then(resp => {
-                return resp.text();
-            }).catch(err => {
-                throw err;
-            });
-        } // TODO
-    }
-
     private notifySubscribers(url: string, file: string) {
         const callbacks = this.subscriptions[url];
+        delete this.subscriptions[url];
         callbacks.forEach(callback => callback(file));
     }
 
