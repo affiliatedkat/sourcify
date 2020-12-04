@@ -1,5 +1,5 @@
 import { CheckedContract, PathBuffer, StringMap } from '@ethereum-sourcify/core';
-import Repo from './repo';
+import SourceFetcher from './source-fetcher';
 import { Injector } from '@ethereum-sourcify/verification';
 import { ValidationService } from '@ethereum-sourcify/validation';
 import Logger from 'bunyan';
@@ -17,19 +17,19 @@ export default class PendingContract {
     private bytecode: string;
     private pendingSources: SourceInfoMap;
     private fetchedSources: StringMap;
-    private repo;
+    private sourceFetcher: SourceFetcher;
     private injector: Injector;
     private logger = new Logger({ name: "Pending Contract" });
 
     // TODO too many parameters - switch to single object
     // TODO injector - one instance per pending contract
-    constructor(chain: string, address: string, bytecode: string, metadataHash: string, repo: Repo, injector: Injector) {
+    constructor(chain: string, address: string, bytecode: string, metadataHash: string, sourceFetcher: SourceFetcher, injector: Injector) {
         this.chain = chain;
         this.address = address;
         this.bytecode = bytecode;
         
-        this.repo = repo;
-        this.repo.subscribe(metadataHash, this.addMetadata);
+        this.sourceFetcher = sourceFetcher;
+        this.sourceFetcher.subscribe(new SourceInfo(), this.addMetadata);
 
         this.injector = injector;
     }
@@ -43,7 +43,7 @@ export default class PendingContract {
             this.pendingSources[source.keccak256] = source;
 
             for (const url of source.urls) { // TODO make this more efficient; this might leave unnecessary subscriptions hanging
-                this.repo.subscribe(url, this.addFetchedSource);
+                this.sourceFetcher.subscribe(url, this.addFetchedSource);
             }
 
         }
