@@ -2,11 +2,9 @@ import Logger from "bunyan";
 import nodeFetch from "node-fetch";
 import { IGateway, SimpleGateway, SourceOrigin } from "./gateway";
 
-type FileFetcher = (url: string) => Promise<string>;
+type FetchedFileCallback= (fetchedFile: string) => any;
 
-type FetchCallback= (fetchedFile: string) => any;
-
-class SourceInfo { // TODO, name colision with class in pending-contract
+export class SourceAddress {
     origin: SourceOrigin;
     id: string;
 
@@ -18,24 +16,28 @@ class SourceInfo { // TODO, name colision with class in pending-contract
     getUniqueIdentifier() {
         return this.origin + "-" + this.id;
     }
-};
+
+    static from(url: string): SourceAddress {
+        throw new Error("Not implemented");
+    }
+}
 
 type Subscription = {
-    sourceInfo: SourceInfo;
-    subscribers: Array<FetchCallback>;
+    sourceAddress: SourceAddress;
+    subscribers: Array<FetchedFileCallback>;
 }
 
 declare interface Subscriptions {
     [hash: string]: Subscription
 }
 
-export default class SourceFetcher {
+export class SourceFetcher {
     private subscriptions: Subscriptions;
     private logger = new Logger({ name: "SourceFetcher" });
 
     private gateways: IGateway[] = [
         new SimpleGateway("ipfs", "https://ipfs.infura.io:5001/api/v0/cat?arg="),
-        new SimpleGateway("swarm", "https://swarm-gateways.net/bzz-raw:/")
+        new SimpleGateway("bzzr1", "https://swarm-gateways.net/bzz-raw:/")
     ];
 
     constructor(refreshInterval = 15) {
@@ -45,8 +47,8 @@ export default class SourceFetcher {
     private fetch = (): void => {
         for (const sourceHash in this.subscriptions) {
             const subscription = this.subscriptions[sourceHash];
-            const gateway = this.findGateway(subscription.sourceInfo);
-            const fetchUrl = gateway.createUrl(subscription.sourceInfo.id);
+            const gateway = this.findGateway(subscription.sourceAddress);
+            const fetchUrl = gateway.createUrl(subscription.sourceAddress.id);
             nodeFetch(fetchUrl).then(resp => {
                 return resp.text();
             }).then(file => {
@@ -57,14 +59,14 @@ export default class SourceFetcher {
         }
     }
 
-    private findGateway(sourceInfo: SourceInfo) {
+    private findGateway(sourceAddress: SourceAddress) {
         for (const gateway of this.gateways) {
-            if (gateway.worksWith(sourceInfo.origin)) {
+            if (gateway.worksWith(sourceAddress.origin)) {
                 return gateway;
             }
         }
 
-        throw new Error(`Gateway not found for ${sourceInfo.origin}`);
+        throw new Error(`Gateway not found for ${sourceAddress.origin}`);
     }
 
     private notifySubscribers(hash: string, file: string) {
@@ -73,10 +75,10 @@ export default class SourceFetcher {
         subscription.subscribers.forEach(callback => callback(file));
     }
 
-    subscribe(sourceInfo: SourceInfo, callback: FetchCallback): void {
-        const sourceHash = sourceInfo.getUniqueIdentifier();
+    subscribe(sourceAddress: SourceAddress, callback: FetchedFileCallback): void {
+        const sourceHash = sourceAddress.getUniqueIdentifier();
         if (!(sourceHash in this.subscriptions)) {
-            this.subscriptions[sourceHash] = { sourceInfo, subscribers: [] };
+            this.subscriptions[sourceHash] = { sourceAddress, subscribers: [] };
         }
 
         this.subscriptions[sourceHash].subscribers.push(callback);

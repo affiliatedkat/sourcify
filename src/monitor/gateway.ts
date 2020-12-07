@@ -1,4 +1,4 @@
-export type SourceOrigin = "ipfs" | "swarm";
+export type SourceOrigin = "ipfs" | "bzzr1"; // TODO bzzr0?
 
 export declare interface IGateway {
     worksWith: (origin: SourceOrigin) => boolean;

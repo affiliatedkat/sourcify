@@ -1,37 +1,27 @@
 import { CheckedContract, PathBuffer, StringMap } from '@ethereum-sourcify/core';
-import SourceFetcher from './source-fetcher';
+import { SourceFetcher, SourceAddress } from './source-fetcher';
 import { Injector } from '@ethereum-sourcify/verification';
 import { ValidationService } from '@ethereum-sourcify/validation';
 import Logger from 'bunyan';
 import Web3 from 'web3';
 
-type SourceInfo = { keccak256: string, urls: string[], name: string };
-interface SourceInfoMap {
-    [name: string]: SourceInfo;
+type PendingSource = { keccak256: string, urls: string[], name: string };
+interface PendingSourceMap {
+    [name: string]: PendingSource;
 }
-type Metadata = { sources: SourceInfoMap };
+type Metadata = { sources: PendingSourceMap };
 
 export default class PendingContract {
-    private chain: string;
-    private address: string;
-    private bytecode: string;
-    private pendingSources: SourceInfoMap;
+    private pendingSources: PendingSourceMap;
     private fetchedSources: StringMap;
     private sourceFetcher: SourceFetcher;
-    private injector: Injector;
+    private callback: (fetchedSources: StringMap) => any;
     private logger = new Logger({ name: "Pending Contract" });
 
-    // TODO too many parameters - switch to single object
-    // TODO injector - one instance per pending contract
-    constructor(chain: string, address: string, bytecode: string, metadataHash: string, sourceFetcher: SourceFetcher, injector: Injector) {
-        this.chain = chain;
-        this.address = address;
-        this.bytecode = bytecode;
-        
+    constructor(metadataAddress: SourceAddress, sourceFetcher: SourceFetcher, callback: (fetchedSources: StringMap) => any) {
         this.sourceFetcher = sourceFetcher;
-        this.sourceFetcher.subscribe(new SourceInfo(), this.addMetadata);
-
-        this.injector = injector;
+        this.sourceFetcher.subscribe(metadataAddress, this.addMetadata);
+        this.callback = callback;
     }
 
     private addMetadata = (rawMetadata: string) => {
@@ -43,7 +33,7 @@ export default class PendingContract {
             this.pendingSources[source.keccak256] = source;
 
             for (const url of source.urls) { // TODO make this more efficient; this might leave unnecessary subscriptions hanging
-                this.sourceFetcher.subscribe(url, this.addFetchedSource);
+                this.sourceFetcher.subscribe(SourceAddress.from(url), this.addFetchedSource);
             }
 
         }
@@ -54,57 +44,14 @@ export default class PendingContract {
         const deleted = delete this.pendingSources[hash];
 
         if (!deleted) {
-            const msg = `Attempted addition of a nonrequired source (${hash}) to contract (${this.address})`;
-            this.logger.error({ loc: "[PENDING_CONTRACT]", hash, address: this.address }, msg);
+            const msg = `Attempted addition of a nonrequired source (${hash}) to contract`; // TODO id of contract
+            this.logger.error({ loc: "[PENDING_CONTRACT]", hash}, msg); // TODO id of contract
             throw new Error(msg);
         }
 
         this.fetchedSources[name] = source;
         if (isObjectEmpty(this.pendingSources)) {
-            this.finalize();
-        }
-    }
-
-    private finalize(): void {
-        const pathBuffers: PathBuffer[] = [];
-        for (const sourceName in this.fetchedSources) {
-            const sourceValue = this.fetchedSources[sourceName];
-            pathBuffers.push({ path: sourceName, buffer: Buffer.from(sourceValue) });
-        }
-
-        const contracts = new ValidationService().checkFiles(pathBuffers);
-        this.checkContractArray(contracts);
-
-        this.injector.inject({
-            addresses: [this.address],
-            chain: this.chain,
-            bytecode: this.bytecode,
-            contracts
-        });
-    }
-
-    private checkContractArray(contracts: CheckedContract[]) {
-        if (contracts.length !== 1) {
-            const msg = `Cannot inject more than one contract per chain address; ${contracts.length} attempted.`;
-            this.logger.error({
-                loc: "[PENDING_CONTRACT]",
-                chain: this.chain,
-                address: this.address
-            }, msg);
-            throw new Error(msg);
-        }
-
-        const contract = contracts[0];
-        if (!contract.isValid()) {
-            const msg = `Invalid contract ${contract.name} at chain ${this.chain} at address ${this.address}.`;
-            this.logger.error({
-                loc: "[PENDING_CONTRACT]",
-                name: contract.name,
-                chain: this.chain,
-                address: this.address,
-                missing: Object.keys(contract.missing)
-            }, msg);
-            throw new Error(msg);
+            this.callback(this.fetchedSources);
         }
     }
 }
