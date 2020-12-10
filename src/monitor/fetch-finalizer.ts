@@ -16,6 +16,7 @@ export default class FetchFinalizer {
         this.address = address;
         this.bytecode = bytecode;
         this.injector = injector;
+        throw new Error("Not implemented - validation service"); // TODO validationService
         this.logger = new Logger({ name: "FetchFinalizer", chainId, address }); // TODO are chainId and address legal?
     }
 

@@ -4,6 +4,9 @@ import { IGateway, SimpleGateway, SourceOrigin } from "./gateway";
 
 type FetchedFileCallback= (fetchedFile: string) => any;
 
+const IPFS_PREFIX = "dweb:/ipfs/";
+const SWARM_PREFIX = "bzz-raw:/";
+
 export class SourceAddress {
     origin: SourceOrigin;
     id: string;
@@ -18,7 +21,13 @@ export class SourceAddress {
     }
 
     static from(url: string): SourceAddress {
-        throw new Error("Not implemented");
+        if (url.startsWith(IPFS_PREFIX)) {
+            return new SourceAddress("ipfs", url.slice(IPFS_PREFIX.length));
+        } else if (url.startsWith(SWARM_PREFIX)) {
+            return new SourceAddress("bzzr1", url.slice(SWARM_PREFIX.length));
+        }
+
+        throw new Error(`Could not deduce source origin from url: ${url}`);
     }
 }
 
