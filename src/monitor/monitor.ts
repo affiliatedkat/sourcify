@@ -26,7 +26,8 @@ class ChainMonitor {
         this.chainId = chainId;
         this.web3Provider = new Web3(web3Url);
         this.sourceFetcher = sourceFetcher;
-        this.validationService = new ValidationService(); // TODO pass on from parent
+        this.logger = new Logger({ name: `Chain ${chainId}` });
+        this.validationService = new ValidationService();
     }
 
     start(): void {
@@ -69,7 +70,9 @@ class ChainMonitor {
             return new SourceAddress("bzzr1", metadataId);
         }
 
-        throw new Error(`Unsupported metadata file format: ${Object(cborData).keys()}`);
+        const msg = `Unsupported metadata file format: ${Object(cborData).keys()}`;
+        this.logger.error(msg);
+        throw new Error(msg);
     }
 }
 
