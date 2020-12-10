@@ -20,7 +20,7 @@ export default class FetchFinalizer {
         this.logger = new Logger({ name: "FetchFinalizer", chainId, address }); // TODO are chainId and address legal?
     }
 
-    finalize = (fetchedSources: StringMap) => {
+    finalize = (fetchedSources: StringMap): void => {
         const pathBuffers: PathBuffer[] = [];
         for (const sourceName in fetchedSources) {
             const sourceValue = fetchedSources[sourceName];

@@ -1,4 +1,4 @@
-import { cborDecode, getSupportedChains, MonitorConfig, PathBuffer, StringMap, CheckedContract } from "@ethereum-sourcify/core";
+import { cborDecode, getSupportedChains, MonitorConfig } from "@ethereum-sourcify/core";
 import { Injector } from "@ethereum-sourcify/verification";
 import Logger from "bunyan";
 import Web3 from "web3";
@@ -11,7 +11,7 @@ import FetchFinalizer from "./fetch-finalizer";
 const multihashes = require("multihashes");
 
 function createsContract(tx: any): boolean { // TODO type
-    throw new Error("Not implemented");
+    return !tx.to;
 }
 
 class ChainMonitor {
@@ -29,12 +29,12 @@ class ChainMonitor {
         this.validationService = new ValidationService(); // TODO pass on from parent
     }
 
-    start() {
+    start(): void {
         setInterval(this.fetchBlocks, null); // TODO
     }
 
 
-    stop() {
+    stop(): void {
         throw new Error("Not implemented");
     }
 
@@ -96,11 +96,11 @@ export class Monitor {
         }).then(injector => this.injector = injector);
     }
 
-    start() {
+    start(): void {
         this.chainMonitors.forEach(chainMonitor => chainMonitor.start());
     }
 
-    stop() {
+    stop(): void {
         this.chainMonitors.forEach(chainMonitor => chainMonitor.stop());
     }
 }

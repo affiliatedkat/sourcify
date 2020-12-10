@@ -1,7 +1,5 @@
-import { CheckedContract, PathBuffer, StringMap } from '@ethereum-sourcify/core';
+import { StringMap } from '@ethereum-sourcify/core';
 import { SourceFetcher, SourceAddress } from './source-fetcher';
-import { Injector } from '@ethereum-sourcify/verification';
-import { ValidationService } from '@ethereum-sourcify/validation';
 import Logger from 'bunyan';
 import Web3 from 'web3';
 

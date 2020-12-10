@@ -16,7 +16,7 @@ export class SourceAddress {
         this.id = id;
     }
 
-    getUniqueIdentifier() {
+    getUniqueIdentifier(): string {
         return this.origin + "-" + this.id;
     }
 
