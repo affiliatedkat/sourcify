@@ -2,7 +2,7 @@ import { NextFunction, Request, Response, Router } from 'express';
 import BaseController from './BaseController';
 import { IController } from '../../common/interfaces';
 import { IVerificationService } from '@ethereum-sourcify/verification';
-import { InputData, getChainId, Logger } from '@ethereum-sourcify/core';
+import { InputData, getChainId, Logger, PathContent } from '@ethereum-sourcify/core';
 import { NotFoundError } from '../../common/errors'
 import { IValidationService } from '@ethereum-sourcify/validation';
 import * as bunyan from 'bunyan';
@@ -23,7 +23,7 @@ export default class VerificationController extends BaseController implements IC
         this.logger = Logger("VerificationService");
     }
 
-    verify = async (req: Request, res: Response, next: NextFunction) => {
+    verify = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         let chain;
         try {
             chain = getChainId(req.body.chain);
@@ -42,8 +42,10 @@ export default class VerificationController extends BaseController implements IC
             if (!req.files) return next(new NotFoundError("Address for specified chain not found in repository"));
             
             const filesArr: fileUpload.UploadedFile[] = [].concat(req.files!.files); // ensure an array, regardless of how many files received
+            // TODO check name
             const wrappedFiles = filesArr.map(f => ({ buffer: f.data }));
-            const validatedContracts = this.validationService.checkFiles(wrappedFiles);
+            const unused: PathContent[] = [];
+            const validatedContracts = this.validationService.checkFiles(wrappedFiles, unused);
             const errors = validatedContracts
                             .filter(contract => Object.keys(contract.invalid).length)
                             .map(contract => `${contract.name} ${Object(contract.invalid).keys()}`);
@@ -53,9 +55,10 @@ export default class VerificationController extends BaseController implements IC
             }
             inputData.contracts = validatedContracts;
             const matches: any = [];
-            matches.push(await this.verificationService.inject(inputData, config.localchain.url));
+            matches.push(this.verificationService.inject(inputData, config.localchain.url));
             Promise.all(matches).then((result) => {
-                res.status(200).send({ result })
+                this.resetVerificationSession(req, res);
+                res.status(200).send({ result });
             }).catch()
         }
 
@@ -88,12 +91,36 @@ export default class VerificationController extends BaseController implements IC
         res.send(resultArray)
     }
 
+    getUploadedFiles = async (req: Request, res: Response) => {
+        return req.session.uploadedFiles || {};
+    }
+
+    resetVerificationSession = async (req: Request, res: Response) => {
+        const id = req.sessionID;
+        // TODO or simply delete req.session.nameOfProperty
+        req.session.destroy((err: any) => {
+            if (err) {
+                this.logger.error({ loc: "[VERIFICATION_CONTROLER]", id, err }, "Error in session destruction");
+            } else {
+                this.logger.info({ loc: "[VERIFICATION_CONTROLLER]", id  }, "Session successfully destroyed");
+            }
+        })
+    }
+
     registerRoutes = (): Router => {
         this.router
             .post([
             ], this.safeHandler(this.verify));
+        
         this.router.route('/checkByAddresses')
             .get([], this.safeHandler(this.checkByAddresses));
+        
+        this.router.route('/uploaded-files')
+            .get(this.safeHandler(this.getUploadedFiles));
+        
+        this.router.route('/reset-verification-session')
+            .post(this.safeHandler(this.resetVerificationSession));
+
         return this.router;
     }
 }

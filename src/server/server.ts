@@ -9,6 +9,7 @@ import { Logger } from '@ethereum-sourcify/core';
 import bunyan from 'bunyan';
 import genericErrorHandler from './middlewares/GenericErrorHandler';
 import notFoundHandler from './middlewares/NotFoundError';
+import session from 'express-session';
 
 export const logger: bunyan = Logger("Server");
 export class Server {
@@ -34,6 +35,7 @@ export class Server {
     this.app.use(cors())
     this.app.use(bodyParser.json());
     this.app.use(bodyParser.urlencoded({ extended: true }));
+    this.app.use(session(getSessionOptions()));
     this.app.get('/health', (_req, res) => res.status(200).send('Alive and kicking!'))
     this.app.use('/repository', express.static(this.repository), serveIndex(this.repository, {'icons': true}))
     this.app.use('/', routes);
@@ -43,4 +45,23 @@ export class Server {
   }
 }
 
-const server = new Server();
+function getSessionOptions(): session.SessionOptions {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) {
+    throw new Error("Environment variable SESSION_SECRET must be provided!");
+  }
+
+  const defaultMaxAge = 12 * 60 * 60 * 1000; // defaults to 12 hrs in millis
+  const maxAge = parseInt(process.env.SESSION_MAX_AGE, 10) || defaultMaxAge;
+
+  return {
+    secret,
+    rolling: true,
+    resave: false,
+    saveUninitialized: true,
+    cookie: { maxAge } };
+}
+
+if (require.main === module) {
+  const server = new Server();
+}
