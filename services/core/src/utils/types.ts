@@ -14,6 +14,21 @@ export interface InputData {
     bytecode?: string;
 }
 
+export interface CompilationSettings {
+  compilationTarget: any;
+  outputSelection: any;
+}
+
+export interface CompilerInfo {
+  version: string;
+}
+
+export interface Metadata {
+  sources: any;
+  settings: CompilationSettings;
+  compiler: CompilerInfo;
+}
+
 export declare interface StringMap {
   [key: string]: string;
 }

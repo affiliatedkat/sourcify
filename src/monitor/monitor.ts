@@ -646,7 +646,7 @@ export default class Monitor {
         const validatedFiles = this.validationService.checkFiles(inputFiles);
         const errors = validatedFiles
                         .filter(contract => !contract.isValid())
-                        .map(contract => contract.info);
+                        .map(contract => contract.getInfo());
         if (errors.length) {
           throw new Error(errors.join("\n"));
         }

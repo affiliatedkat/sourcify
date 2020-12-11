@@ -83,7 +83,7 @@ export class ValidationService implements IValidationService {
             const checkedContract = new CheckedContract(metadata, foundSources, missingSources, invalidSources);
             checkedContracts.push(checkedContract);
             if (!checkedContract.isValid()) {
-                errorMsgMaterial.push(checkedContract.info);
+                errorMsgMaterial.push(checkedContract.getInfo());
             }
         });
 

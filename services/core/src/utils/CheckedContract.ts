@@ -1,5 +1,5 @@
 import Web3 from 'web3';
-import { StringMap, SourceMap } from './types';
+import { StringMap, SourceMap, Metadata } from './types';
 import bunyan from 'bunyan';
 import fetch from 'node-fetch';
 
@@ -11,11 +11,11 @@ const IPFS_PREFIX = "dweb:/ipfs/";
 
 /**
  * Abstraction of a checked solidity contract. With metadata and source (solidity) files.
- * The info property contains the information about compilation or errors encountered while validating the metadata.
+ * The getInfo method returns the information about compilation or errors encountered while validating the metadata.
  */
 export class CheckedContract {
     /** Object containing contract metadata keys and values. */
-    metadata: any;
+    metadata: Metadata;
 
     /** SourceMap mapping the original compilation path to PathContent. */
     solidity: StringMap;
@@ -25,12 +25,6 @@ export class CheckedContract {
 
     /** Contains the invalid source files. */
     invalid: StringMap;
-
-    /**
-     * Contains the message about compilation or errors encountered while validating the metadata.
-     * Should be without a trailing newline.
-     */
-    info: string;
 
     /** Object containing input for solc when used with the --standard-json flag. */
     standardJson: any;
@@ -75,8 +69,6 @@ export class CheckedContract {
         const { contractPath, contractName } = this.getPathAndName();
         this.compiledPath = contractPath;
         this.name = contractName;
-
-        this.info = this.isValid() ? this.composeSuccessMessage() : this.composeErrorMessage();
     }
 
     /**
@@ -105,8 +97,9 @@ export class CheckedContract {
             standardJson.settings = {};
             standardJson.settings.outputSelection = { "*": { "*": [ "evm.bytecode", "abi" ] } };
             for (const key of STANDARD_JSON_SETTINGS_KEYS) {
-                if (Object.prototype.hasOwnProperty.call(this.metadata.settings, key)) {
-                    standardJson.settings[key] = this.metadata.settings[key];
+                const settings: any = this.metadata.settings; // has to be of type any, does not compile if calling this.metadata.settings
+                if (Object.prototype.hasOwnProperty.call(settings, key)) {
+                    standardJson.settings[key] = settings[key];
                 }
             }
         }
@@ -219,8 +212,6 @@ export class CheckedContract {
             this.solidity[fileName] = retrieved[fileName];
         }
 
-        this.info = this.isValid() ? this.composeSuccessMessage() : this.composeErrorMessage();
-
         const missingFiles = Object.keys(this.missing);
         if (missingFiles.length) {
             log.error({ loc: "[FETCH]", contractName: this.name, missingFiles });
@@ -247,6 +238,17 @@ export class CheckedContract {
             if (log) log.error(infoObject, "Fetch failed!");
             return null;
         }
+    }
+
+
+    /**
+     * Returns a message describing the errors encountered while validating the metadata.
+     * Does not include a trailing newline.
+     * 
+     * @returns the validation info message
+     */
+    public getInfo() {
+        return this.isValid() ? this.composeSuccessMessage() : this.composeErrorMessage();
     }
 }
 

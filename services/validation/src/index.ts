@@ -110,12 +110,12 @@ if (require.main === module) {
             if (contract.isValid()) {
                 recompilableContracts.push(contract);
             } else {
-                console.log(contract.info);
+                console.log(contract.getInfo());
                 console.log(`The ${OPTION_NAME} target is not a valid contract! Exiting.`);
                 process.exit(1);
             }
         } else if (recompilationTarget === undefined) {
-            let msg = contract.info; // should be without a trailing newline
+            let msg = contract.getInfo(); // should be without a trailing newline
             if (contract.isValid()) {
                 msg += "\n";
                 msg += `  To recompile, use: \`${name} --${OPTION_NAME} ${contract.compiledPath}:${contract.name} ${fileNamesJoint}`;
