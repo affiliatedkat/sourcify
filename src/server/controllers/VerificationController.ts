@@ -2,12 +2,24 @@ import { NextFunction, Request, Response, Router } from 'express';
 import BaseController from './BaseController';
 import { IController } from '../../common/interfaces';
 import { IVerificationService } from '@ethereum-sourcify/verification';
-import { InputData, getChainId, Logger, PathContent } from '@ethereum-sourcify/core';
+import { InputData, getChainId, Logger, PathContent, Match, PathBuffer } from '@ethereum-sourcify/core';
 import { NotFoundError } from '../../common/errors'
 import { IValidationService } from '@ethereum-sourcify/validation';
 import * as bunyan from 'bunyan';
 import config from '../../config';
 import fileUpload from 'express-fileupload';
+import session, { Session } from 'express-session';
+
+type MySession = Session & {
+    files: BufferMap;
+};
+
+type MySessionRequest = Request & {
+    session: MySession;
+};
+interface BufferMap {
+    [name: string]: Buffer;
+}
 
 export default class VerificationController extends BaseController implements IController {
     router: Router;
@@ -31,30 +43,32 @@ export default class VerificationController extends BaseController implements IC
             return next(error);
         }
 
-        const inputData: InputData = {
-            addresses: [req.body.address],
-            chain: chain
-        }
-        const result = await this.verificationService.findByAddress(req.body.address, inputData.chain, config.repository.path);
+        const result = await this.verificationService.findByAddress(req.body.address, chain, config.repository.path);
         if (result.length != 0) {
             res.status(200).send({ result });
         } else {
             if (!req.files) return next(new NotFoundError("Address for specified chain not found in repository"));
             
-            const filesArr: fileUpload.UploadedFile[] = [].concat(req.files!.files); // ensure an array, regardless of how many files received
-            // TODO check name
-            const wrappedFiles = filesArr.map(f => ({ buffer: f.data }));
+            const pathBuffers = this.extractPathBuffers(req);
+            this.setSessionFiles(pathBuffers, req.session as MySession);
             const unused: PathContent[] = [];
-            const validatedContracts = this.validationService.checkFiles(wrappedFiles, unused);
+            const validatedContracts = this.validationService.checkFiles(pathBuffers, unused);
             const errors = validatedContracts
                             .filter(contract => Object.keys(contract.invalid).length)
                             .map(contract => `${contract.name} ${Object(contract.invalid).keys()}`);
 
+            
+
             if (errors.length) {
                 return next(new NotFoundError("Errors in:\n" + errors.join("\n"), false));
             }
-            inputData.contracts = validatedContracts;
-            const matches: any = [];
+
+            const inputData: InputData = {
+                contracts: validatedContracts,
+                addresses: req.body.address,
+                chain
+            };
+            const matches: Promise<Match>[] = []; // TODO verificationService should return an array of matches
             matches.push(this.verificationService.inject(inputData, config.localchain.url));
             Promise.all(matches).then((result) => {
                 this.resetVerificationSession(req, res);
@@ -91,20 +105,66 @@ export default class VerificationController extends BaseController implements IC
         res.send(resultArray)
     }
 
-    getUploadedFiles = async (req: Request, res: Response) => {
-        return req.session.uploadedFiles || {};
+    private extractPathBuffers(req: Request): PathBuffer[] {
+        const filesArr: fileUpload.UploadedFile[] = [].concat(req.files.files); // ensure an array, regardless of how many files received
+        const pathBuffers: PathBuffer[] = filesArr.map(f => ({ path: f.name, buffer: f.data }));
+        return pathBuffers;
+    }
+
+    private setSessionFiles = (files: PathBuffer[], session: MySession, deleteUnmentioned = false) => {
+        const paths = files.map(f => f.path);
+        const sessionFiles: BufferMap = session.files;
+        const toDelete: string[] = [];
+        for (const path in sessionFiles) {
+            if (paths.includes(path)) {
+                const buffer = sessionFiles[path];
+                if (buffer.length) {
+                    sessionFiles[path] = buffer;
+                }
+            } else {
+                toDelete.push(path);
+            }
+        }
+
+        if (deleteUnmentioned) {
+            toDelete.forEach(path => delete sessionFiles[path]);
+        }
+    };
+
+    setSessionFilesEndpoint = async (req: Request, res: Response) => {
+        const files = this.extractPathBuffers(req);
+        this.setSessionFiles(files, req.session as MySession, true);
+    };
+
+    getSessionFilesEndpoint = async (req: Request, res: Response) => {
+        // tried changing to req: MySessionRequest in the argument list
+        // did not work because below it has to be passed to safeHandler
+        const session = (req as MySessionRequest).session;
+        res.send(session.files || {});
     }
 
     resetVerificationSession = async (req: Request, res: Response) => {
         const id = req.sessionID;
         // TODO or simply delete req.session.nameOfProperty
         req.session.destroy((err: any) => {
+            let msg = "";
+            let statusCode = null;
+
+            const loggerOptions: any = { loc: "[VERIFICATION_CONTROLER]", id};
             if (err) {
-                this.logger.error({ loc: "[VERIFICATION_CONTROLER]", id, err }, "Error in session destruction");
+                msg = "Error in session destruction";
+                statusCode = 500;
+                loggerOptions.err = err;
+                this.logger.error(loggerOptions, msg);
+
             } else {
-                this.logger.info({ loc: "[VERIFICATION_CONTROLLER]", id  }, "Session successfully destroyed");
+                msg = "Session successfully destroyed";
+                statusCode = 200;
+                this.logger.info(loggerOptions, msg);
             }
-        })
+
+            res.status(statusCode).send(msg);
+        });
     }
 
     registerRoutes = (): Router => {
@@ -116,7 +176,8 @@ export default class VerificationController extends BaseController implements IC
             .get([], this.safeHandler(this.checkByAddresses));
         
         this.router.route('/uploaded-files')
-            .get(this.safeHandler(this.getUploadedFiles));
+            .get(this.safeHandler(this.getSessionFilesEndpoint))
+            .post(this.safeHandler(this.setSessionFilesEndpoint))
         
         this.router.route('/reset-verification-session')
             .post(this.safeHandler(this.resetVerificationSession));
