@@ -1,6 +1,6 @@
 import bunyan from 'bunyan';
 import Web3 from 'web3';
-import { StringMap, SourceMap, PathBuffer, PathContent, CheckedContract } from '@ethereum-sourcify/core';
+import { StringMap, SourceMap, PathBuffer, PathContent, CheckedContract, BufferMap } from '@ethereum-sourcify/core';
 import AdmZip from 'adm-zip';
 import fs from 'fs';
 import Path from 'path';
@@ -38,7 +38,7 @@ export interface IValidationService {
      * @returns An array of CheckedContract objets.
      * @throws Error if no metadata files are found.
      */
-    checkFiles(files: PathBuffer[], unused?: PathContent[]): CheckedContract[];
+    checkFiles(files: PathBuffer[] | BufferMap, unused?: PathContent[]): CheckedContract[];
 }
 
 export class ValidationService implements IValidationService {
@@ -68,7 +68,15 @@ export class ValidationService implements IValidationService {
         return this.checkFiles(files);
     }
 
-    checkFiles(files: PathBuffer[], unused?: PathContent[]): CheckedContract[] {
+    checkFiles(files: PathBuffer[] | BufferMap, unused?: PathContent[]): CheckedContract[] {
+        if (!Array.isArray(files)) { // ensure the type is an array of PathBuffers
+            const arr: PathBuffer[] = [];
+            for (const name in files) {
+                arr.push({ path: name, buffer: files[name] });
+            }
+            files = arr;
+        }
+
         const inputFiles = this.findInputFiles(files);
         const parsedFiles = inputFiles.map(pathBuffer => ({ content: pathBuffer.buffer.toString(), path: pathBuffer.path }));
         const { metadataFiles, otherFiles } = this.splitFiles(parsedFiles);

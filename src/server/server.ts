@@ -46,11 +46,7 @@ export class Server {
 }
 
 function getSessionOptions(): session.SessionOptions {
-  const secret = process.env.SESSION_SECRET;
-  if (!secret) {
-    throw new Error("Environment variable SESSION_SECRET must be provided!");
-  }
-
+  const secret = process.env.SESSION_SECRET; // will throw in session constructor if undefined
   const defaultMaxAge = 12 * 60 * 60 * 1000; // defaults to 12 hrs in millis
   const maxAge = parseInt(process.env.SESSION_MAX_AGE, 10) || defaultMaxAge;
 

@@ -2,13 +2,13 @@ import { NextFunction, Request, Response, Router } from 'express';
 import BaseController from './BaseController';
 import { IController } from '../../common/interfaces';
 import { IVerificationService } from '@ethereum-sourcify/verification';
-import { InputData, getChainId, Logger, PathContent, Match, PathBuffer } from '@ethereum-sourcify/core';
+import { InputData, getChainId, Logger, PathContent, Match, PathBuffer, BufferMap } from '@ethereum-sourcify/core';
 import { NotFoundError } from '../../common/errors'
 import { IValidationService } from '@ethereum-sourcify/validation';
 import * as bunyan from 'bunyan';
 import config from '../../config';
 import fileUpload from 'express-fileupload';
-import session, { Session } from 'express-session';
+import { Session } from 'express-session';
 
 type MySession = Session & {
     files: BufferMap;
@@ -17,9 +17,6 @@ type MySession = Session & {
 type MySessionRequest = Request & {
     session: MySession;
 };
-interface BufferMap {
-    [name: string]: Buffer;
-}
 
 export default class VerificationController extends BaseController implements IController {
     router: Router;
@@ -50,14 +47,13 @@ export default class VerificationController extends BaseController implements IC
             if (!req.files) return next(new NotFoundError("Address for specified chain not found in repository"));
             
             const pathBuffers = this.extractPathBuffers(req);
-            this.setSessionFiles(pathBuffers, req.session as MySession);
+            const mySession = req.session as MySession;
+            this.setSessionFiles(pathBuffers, mySession);
             const unused: PathContent[] = [];
-            const validatedContracts = this.validationService.checkFiles(pathBuffers, unused);
+            const validatedContracts = this.validationService.checkFiles(mySession.files, unused);
             const errors = validatedContracts
                             .filter(contract => Object.keys(contract.invalid).length)
                             .map(contract => `${contract.name} ${Object(contract.invalid).keys()}`);
-
-            
 
             if (errors.length) {
                 return next(new NotFoundError("Errors in:\n" + errors.join("\n"), false));
@@ -71,7 +67,7 @@ export default class VerificationController extends BaseController implements IC
             const matches: Promise<Match>[] = []; // TODO verificationService should return an array of matches
             matches.push(this.verificationService.inject(inputData, config.localchain.url));
             Promise.all(matches).then((result) => {
-                this.resetVerificationSession(req, res);
+                this.resetSession(req, res);
                 res.status(200).send({ result });
             }).catch()
         }
@@ -112,22 +108,28 @@ export default class VerificationController extends BaseController implements IC
     }
 
     private setSessionFiles = (files: PathBuffer[], session: MySession, deleteUnmentioned = false) => {
-        const paths = files.map(f => f.path);
-        const sessionFiles: BufferMap = session.files;
-        const toDelete: string[] = [];
-        for (const path in sessionFiles) {
-            if (paths.includes(path)) {
-                const buffer = sessionFiles[path];
-                if (buffer.length) {
-                    sessionFiles[path] = buffer;
-                }
-            } else {
-                toDelete.push(path);
-            }
+        if (!session.files) {
+            session.files = [];
         }
 
         if (deleteUnmentioned) {
-            toDelete.forEach(path => delete sessionFiles[path]);
+            // delete files not mentioned in paths
+            const incomingPaths = files.map(f => f.path);
+            const toDelete: string[] = [];
+            for (const path in session.files) {
+                if (!incomingPaths.includes(path)) {
+                    toDelete.push(path);
+                }
+            }
+
+            toDelete.forEach(path => delete session.files[path]);
+        }
+
+        // add new files and replace old files with new content
+        for (const file of files) {
+            if (file.buffer.length) {
+                session.files.push(file);
+            }
         }
     };
 
@@ -143,7 +145,7 @@ export default class VerificationController extends BaseController implements IC
         res.send(session.files || {});
     }
 
-    resetVerificationSession = async (req: Request, res: Response) => {
+    resetSession = async (req: Request, res: Response) => {
         const id = req.sessionID;
         // TODO or simply delete req.session.nameOfProperty
         req.session.destroy((err: any) => {
@@ -175,12 +177,12 @@ export default class VerificationController extends BaseController implements IC
         this.router.route('/checkByAddresses')
             .get([], this.safeHandler(this.checkByAddresses));
         
-        this.router.route('/uploaded-files')
+        this.router.route('/session-files')
             .get(this.safeHandler(this.getSessionFilesEndpoint))
             .post(this.safeHandler(this.setSessionFilesEndpoint))
         
         this.router.route('/reset-verification-session')
-            .post(this.safeHandler(this.resetVerificationSession));
+            .post(this.safeHandler(this.resetSession));
 
         return this.router;
     }
