@@ -52,6 +52,7 @@ function getSessionOptions(): session.SessionOptions {
 
   return {
     secret,
+    name: "sourcify_vid",
     rolling: true,
     resave: false,
     saveUninitialized: true,
