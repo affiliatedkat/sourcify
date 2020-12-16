@@ -12,7 +12,7 @@ services:
       - ui
       - repository
     environment:
-      DOMAINS: 'server.${FQDN} -> http://server-${TAG}:${SERVER_PORT}, ${FQDN} -> http://ui-${TAG}:${UI_PORT}, contractrepo.${FQDN} -> http://repository-${TAG}:${REPOSITORY_PORT}'
+      DOMAINS: 'server.${FQDN} -> http://server-${TAG}:${SERVER_PORT}, ${FQDN} -> http://ui-${TAG}:${UI_PORT}, contractrepo.${FQDN} -> http://repository-${TAG}:${REPOSITORY_PORT}, prometheus.sourcify.shardlabs.io -> http://prometheus:9090'
       STAGE: 'production'
       FORCE_RENEW: 'false'
     networks:
