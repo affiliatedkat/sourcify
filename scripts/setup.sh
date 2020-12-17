@@ -30,7 +30,7 @@ cd environments
 echo $PWD
 eval ${COMPOSE_COMMAND} pull
 echo $PWD
-eval COMPOSE_HTTP_TIMEOUT=200 ${COMPOSE_COMMAND} --compatibility up -d --force-recreate
+eval COMPOSE_HTTP_TIMEOUT=700 ${COMPOSE_COMMAND} --compatibility up -d --force-recreate
 echo $PWD
 cd ..
 ./scripts/clear-repo.sh
