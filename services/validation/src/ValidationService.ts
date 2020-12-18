@@ -1,6 +1,6 @@
 import bunyan from 'bunyan';
 import Web3 from 'web3';
-import { StringMap, SourceMap, PathBuffer, PathContent, CheckedContract, BufferMap } from '@ethereum-sourcify/core';
+import { StringMap, SourceMap, PathBuffer, PathContent, CheckedContract, PathBufferMap } from '@ethereum-sourcify/core';
 import AdmZip from 'adm-zip';
 import fs from 'fs';
 import Path from 'path';
@@ -31,14 +31,14 @@ export interface IValidationService {
     checkPaths(paths: string[], ignoring?: string[]): CheckedContract[];
 
     /**
-     * Checks the files provided in the array of Buffers. May include buffers of zip archives.
+     * Checks the provided files. Works with zips.
      * Attempts to find all the resources specified in every metadata file found.
      * 
-     * @param files The array of buffers to be checked.
+     * @param files The array or object of buffers to be checked.
      * @returns An array of CheckedContract objets.
      * @throws Error if no metadata files are found.
      */
-    checkFiles(files: PathBuffer[] | BufferMap, unused?: PathContent[]): CheckedContract[];
+    checkFiles(files: PathBuffer[] | PathBufferMap, unused?: string[]): CheckedContract[];
 }
 
 export class ValidationService implements IValidationService {
@@ -68,13 +68,9 @@ export class ValidationService implements IValidationService {
         return this.checkFiles(files);
     }
 
-    checkFiles(files: PathBuffer[] | BufferMap, unused?: PathContent[]): CheckedContract[] {
+    checkFiles(files: PathBuffer[] | PathBufferMap, unused?: string[]): CheckedContract[] {
         if (!Array.isArray(files)) { // ensure the type is an array of PathBuffers
-            const arr: PathBuffer[] = [];
-            for (const name in files) {
-                arr.push({ path: name, buffer: files[name] });
-            }
-            files = arr;
+            files = [...Object.values(files)];
         }
 
         const inputFiles = this.findInputFiles(files);
@@ -265,11 +261,11 @@ export class ValidationService implements IValidationService {
         return byHash;
     }
 
-    private extractUnused(byHash: Map<string, CountablePathContent>, unused: PathContent[]): void {
+    private extractUnused(byHash: Map<string, CountablePathContent>, unused: string[]): void {
         for (const [, countablePathContent] of byHash) {
             const { file, count } = countablePathContent;
             if (count === 0) {
-                unused.push(file);
+                unused.push(file.path);
             }
         }
     }

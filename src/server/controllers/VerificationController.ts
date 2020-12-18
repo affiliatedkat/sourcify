@@ -2,7 +2,7 @@ import { NextFunction, Request, Response, Router } from 'express';
 import BaseController from './BaseController';
 import { IController } from '../../common/interfaces';
 import { IVerificationService } from '@ethereum-sourcify/verification';
-import { InputData, getChainId, Logger, PathContent, Match, PathBuffer, BufferMap, CheckedContract } from '@ethereum-sourcify/core';
+import { InputData, getChainId, Logger, PathContent, Match, PathBuffer, PathBufferMap, CheckedContract } from '@ethereum-sourcify/core';
 import { NotFoundError } from '../../common/errors'
 import { IValidationService } from '@ethereum-sourcify/validation';
 import * as bunyan from 'bunyan';
@@ -21,8 +21,8 @@ interface ContractMap {
 }
 
 type MySession = Session & {
-    inputFiles: BufferMap;
-    unusedSources: PathContent[];
+    inputFiles: PathBufferMap;
+    unusedSources: string[];
     pendingContracts: ContractMap;
 };
 
@@ -58,10 +58,12 @@ export default class VerificationController extends BaseController implements IC
         } else {
             if (!req.files) return next(new NotFoundError("Address for specified chain not found in repository"));
             
+            // TODO this doesn't work
             const mySession = req.session as MySession;
             this.addInputFiles(req);
-            const unused: PathContent[] = [];
+            const unused: string[] = [];
             const validatedContracts = this.validationService.checkFiles(mySession.inputFiles, unused);
+            this.updateUnused(req, unused);
             const errors = validatedContracts
                             .filter(contract => Object.keys(contract.invalid).length)
                             .map(contract => `${contract.name} ${Object(contract.invalid).keys()}`);
@@ -91,7 +93,7 @@ export default class VerificationController extends BaseController implements IC
     validate = async (req: Request) => {
         const session = (req.session as MySession);
         const inputFiles = session.inputFiles;
-        const unusedFiles: PathContent[] = [];
+        const unusedFiles: string[] = [];
         this.validationService.checkFiles(inputFiles, unusedFiles);
         // TODO session.unusedFiles = unusedFiles;
     }
@@ -134,9 +136,18 @@ export default class VerificationController extends BaseController implements IC
         res.send(inputFiles);
     }
 
+    // TODO check size
     addInputFilesEndpoint = async (req: Request, res: Response) => {
-        const inputFiles = (req.session as MySession).inputFiles || {};
-        
+        if (!req.body.files) {
+            return res.send(400).send({ error: "No files provided" });
+        }
+
+        const session = (req.session as MySession);
+        if (!session.inputFiles) {
+            session.inputFiles = {};
+        }
+
+        req.body.files
     }
 
     addInputFiles = async (req: Request) => {
@@ -144,13 +155,44 @@ export default class VerificationController extends BaseController implements IC
         // TODO add
     }
 
-    deleteInputFilesEndpoint = async (req: Request, res: Response) => {
-        const receivedFileNames = req.body.fileNames;
-        const inputFiles = (req.session as MySession).inputFiles || {};
-        
-        for (const fileName of receivedFileNames) {
-            delete inputFiles[fileName];
+    updateUnused = async(req: Request, unused: string[]) => {
+        const session = (req.session as MySession);
+        if (!session.unusedSources) {
+            session.unusedSources = [];
         }
+        session.unusedSources = unused;
+    }
+
+    // TODO type of property
+    deleteEndpoint = async (req: Request, res: Response, property: "pendingContracts" | "inputFiles") => {
+        const ids = req.body.ids;
+        if (!ids || !ids.length) {
+            return res.status(400).send({ error: "No ids specified" });
+        }
+        
+        const objects = (req.session as MySession)[property] || {};
+
+        const notFound = [];
+        for (const id of ids) {
+            const deleted = delete objects[id];
+            if (!deleted) {
+                notFound.push(id);
+            }
+        }
+
+        if (notFound.length) {
+            return res.status(400).send({
+                error: "Some ids could not be deleted",
+                notFound,
+                remaining: Object.keys(objects)
+            });
+        }
+
+        res.status(200).send({ remaining: Object.keys(objects) });
+    }
+
+    deleteInputFilesEndpoint = async (req: Request, res: Response) => {
+        return this.deleteEndpoint(req, res, "inputFiles");
     }
 
     getPendingContractsEndpoint = async (req: Request, res: Response) => {
@@ -159,14 +201,7 @@ export default class VerificationController extends BaseController implements IC
     }
 
     deletePendingContractsEndpoint = async (req: Request, res: Response) => {
-        const contractIDs = req.body.contractIDs;
-        if (!contractIDs) {
-            return res.status(400).send("No contractIDs provided");
-        }
-        const pendingContracts = (req.session as MySession).pendingContracts;
-        for (const id of contractIDs) {
-            delete pendingContracts[id];
-        }
+        return this.deleteEndpoint(req, res, "pendingContracts");
     }
 
     resetSessionEndpoint = async (req: Request, res: Response) => {
@@ -194,16 +229,36 @@ export default class VerificationController extends BaseController implements IC
         });
     }
 
-    getUnusedSourcesEndpoint = async () => {
-        // TODO
+    getUnusedSourcesEndpoint = async (req: Request, res: Response) => {
+        const session = (req.session as MySession);
+        res.send(session.unusedSources || []);
     }
 
-    getContractsEndpoint = async () => {
-        // TODO
+    getContractsEndpoint = async (req: Request, res: Response) => {
+        const session = (req.session as MySession);
+        res.send(session.pendingContracts || {});
     }
 
-    deleteContractsEndpoint = async () => {
-        // TODO
+    deleteContractsEndpoint = async (req: Request, res: Response) => {
+        const session = (req.session as MySession);
+        const ids: string[] = req.body.ids;
+        if (!ids || !ids.length) {
+            return res.status(400).send({ error: "No ids specified" });
+        }
+
+        const illegal = [];
+        for (const id of ids) {
+            const deleted = delete session.pendingContracts[id];
+            if (!deleted) {
+                illegal.push(id);
+            }
+        }
+
+        if (illegal.length) {
+            res.status(400).send({ error: "Some contracts could not be deleted" })
+        }
+
+        return res.status(204);
     }
 
     registerRoutes = (): Router => {
