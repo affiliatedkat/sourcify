@@ -1,5 +1,6 @@
 import Web3 from 'web3';
 import { StringMap, SourceMap, Metadata } from './types';
+import { isEmpty } from './utils';
 import bunyan from 'bunyan';
 import fetch from 'node-fetch';
 
@@ -250,13 +251,4 @@ export class CheckedContract {
     public getInfo() {
         return this.isValid() ? this.composeSuccessMessage() : this.composeErrorMessage();
     }
-}
-
-/**
- * Checks whether the provided object contains any keys or not.
- * @param obj The object whose emptiness is tested.
- * @returns true if any keys present; false otherwise
- */
-function isEmpty(obj: object): boolean {
-    return !Object.keys(obj).length;
 }

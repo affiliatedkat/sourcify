@@ -196,17 +196,15 @@ export class Injector {
      */
     public async inject(
         inputData: InputData
-    ): Promise<Match> {
+    ): Promise<Match[]> {
         const { chain, addresses, contracts } = inputData;
         this.validateAddresses(addresses);
         this.validateChain(chain);
 
-        let match: Match = {
-            address: null,
-            status: null
-        };
+        let matches: Match[];
 
         for (const contract of contracts) {
+            let match: Match;
 
             // Starting from here, we cannot trust the metadata object anymore,
             // because it is modified inside recompile.
@@ -284,8 +282,10 @@ export class Injector {
 
                 throw new Error(err.message);
             }
+
+            matches.push(match);
         }
-        return match;
+        return matches;
     }
 
     /**

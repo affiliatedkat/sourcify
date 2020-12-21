@@ -43,10 +43,6 @@ export interface PathContent {
   content: string;
 }
 
-export interface PathBufferMap {
-  [id: string]: PathBuffer;
-}
-
 export interface SourceMap {
   [compiledPath: string]: PathContent;
 }

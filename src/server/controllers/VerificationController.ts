@@ -2,32 +2,47 @@ import { NextFunction, Request, Response, Router } from 'express';
 import BaseController from './BaseController';
 import { IController } from '../../common/interfaces';
 import { IVerificationService } from '@ethereum-sourcify/verification';
-import { InputData, getChainId, Logger, PathContent, Match, PathBuffer, PathBufferMap, CheckedContract } from '@ethereum-sourcify/core';
-import { NotFoundError } from '../../common/errors'
+import { InputData, getChainId, Logger, PathBuffer, CheckedContract, isEmpty } from '@ethereum-sourcify/core';
+import { BadRequestError, NotFoundError } from '../../common/errors'
 import { IValidationService } from '@ethereum-sourcify/validation';
 import * as bunyan from 'bunyan';
 import config from '../../config';
 import fileUpload from 'express-fileupload';
 import { Session } from 'express-session';
+import { isValidAddress } from '../../common/validators/validators';
 
-type ContractWrapper = {
-    data: CheckedContract,
+type ContractLocation = {
     chain: string,
-    address: string,
+    address: string
+}
+
+type ContractWrapper =
+    ContractLocation & {
+    contract: CheckedContract,
 };
+
+interface ContractLocationMap {
+    [id: string]: ContractLocation;
+}
 
 interface ContractMap {
     [id: string]: ContractWrapper;
 }
 
-type MySession = Session & {
+interface PathBufferMap {
+    [id: string]: PathBuffer;
+}
+
+type SessionMaps = {
     inputFiles: PathBufferMap;
-    unusedSources: string[];
     pendingContracts: ContractMap;
 };
 
-type MySessionRequest = Request & {
-    session: MySession;
+type MySession = 
+    Session &
+    SessionMaps & { 
+    unusedSources: string[],
+    started: boolean
 };
 
 export default class VerificationController extends BaseController implements IController {
@@ -35,6 +50,8 @@ export default class VerificationController extends BaseController implements IC
     verificationService: IVerificationService;
     validationService: IValidationService;
     logger: bunyan;
+
+    private static readonly MAX_INPUT_SIZE = 10 * 1024 * 1024; // 10 MB
 
     constructor(verificationService: IVerificationService, validationService: IValidationService) {
         super();
@@ -44,7 +61,7 @@ export default class VerificationController extends BaseController implements IC
         this.logger = Logger("VerificationService");
     }
 
-    verifyEndpoint = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    private legacyVerifyEndpoint = async (req: Request, res: Response, next: NextFunction): Promise<any> => {
         let chain;
         try {
             chain = getChainId(req.body.chain);
@@ -52,53 +69,60 @@ export default class VerificationController extends BaseController implements IC
             return next(error);
         }
 
-        const result = await this.verificationService.findByAddress(req.body.address, chain, config.repository.path);
+        const address = req.body.address;
+        if (!isValidAddress(address)) {
+            return next("Invalid address provided: " + address);
+        }
+
+        const result = await this.verificationService.findByAddress(address, chain, config.repository.path);
         if (result.length != 0) {
             res.status(200).send({ result });
         } else {
-            if (!req.files) return next(new NotFoundError("Address for specified chain not found in repository"));
+            const session = req.session as MySession;
+            let inputFiles: PathBuffer[] = null;
+            try {
+                const extracted = this.extractFiles(req);
+                if (!extracted) {
+                    const msg = "The contract at the provided address has not yet been sourcified.";
+                    return next(new NotFoundError(msg));
+                }
+                
+                inputFiles = session.started ? this.saveFiles(extracted, session) : extracted;
+            } catch(err) {
+                return next(err);
+            }
             
-            // TODO this doesn't work
-            const mySession = req.session as MySession;
-            this.addInputFiles(req);
-            const unused: string[] = [];
-            const validatedContracts = this.validationService.checkFiles(mySession.inputFiles, unused);
-            this.updateUnused(req, unused);
+            const validatedContracts = this.validationService.checkFiles(inputFiles);
             const errors = validatedContracts
                             .filter(contract => Object.keys(contract.invalid).length)
                             .map(contract => `${contract.name} ${Object(contract.invalid).keys()}`);
 
             if (errors.length) {
-                return next(new NotFoundError("Errors in:\n" + errors.join("\n"), false));
+                return next(new BadRequestError("Errors in:\n" + errors.join("\n"), false));
             }
 
             const inputData: InputData = {
                 contracts: validatedContracts,
-                addresses: [req.body.address], // TODO temporarily only one address supported
+                addresses: [address],
                 chain
             };
-            const matches: Promise<Match>[] = []; // TODO verificationService should return an array of matches
-            matches.push(this.verificationService.inject(inputData, config.localchain.url));
-            const result = await Promise.all(matches).catch(); // TODO this probably shouldn't be empty, but has been since at least September 2020
-            res.status(200).send({ result });
+
+            const resultPromise = this.verificationService.inject(inputData, config.localchain.url);
+            resultPromise.then(result => {
+                res.status(200).send({ result });
+            }).catch(err => {
+                res.status(500).send({ err }); // TODO the property name of the sent object
+            });
         }
 
     }
 
-    verifyEndpoint2 = async () => {
-        // TODO this should be triggered by a user pressing the verify button on the frontend
-        // TODO cover the following cases: only one verification required
-    }
-
-    validate = async (req: Request) => {
-        const session = (req.session as MySession);
-        const inputFiles = session.inputFiles;
-        const unusedFiles: string[] = [];
-        this.validationService.checkFiles(inputFiles, unusedFiles);
-        // TODO session.unusedFiles = unusedFiles;
-    }
-
-    checkByAddresses = async (req: any, res: Response) => {
+    private checkByAddresses = async (req: any, res: Response) => {
+        const missingParams = ["addresses", "chainIds"].filter(p => !req.query[p]);
+        if (missingParams) {
+            const msg = `Missing query parameters: ${missingParams.join(", ")}`;
+            return res.status(400).send({ error: msg });
+        }
         let resultArray: Array<Object> = [];
         const map: Map<string, Object> = new Map();
         for (const address of req.query.addresses.split(',')) {
@@ -125,47 +149,143 @@ export default class VerificationController extends BaseController implements IC
         res.send(resultArray)
     }
 
-    private extractPathBuffers(req: Request): PathBuffer[] {
-        const filesArr: fileUpload.UploadedFile[] = [].concat(req.files.files); // ensure an array, regardless of how many files received
-        const pathBuffers: PathBuffer[] = filesArr.map(f => ({ path: f.name, buffer: f.data }));
+    private validateEndpoint = async (req: Request, res: Response) => {
+        const session = (req.session as MySession);
+        if (!session.inputFiles || isEmpty(session.inputFiles)) {
+            // TODO log
+            throw new BadRequestError("No input files to use for validation.");
+        }
+
+        if (!session.pendingContracts) {
+            session.pendingContracts = {};
+        }
+
+        const pathBuffers: PathBuffer[] = [];
+        for (const id in session.inputFiles) {
+            pathBuffers.push(session.inputFiles[id]);
+        }
+        
+        const unused: string[] = [];
+        this.validationService.checkFiles(pathBuffers, unused);
+        this.updateUnused(unused, session);
+    }
+
+    private verifyValidatedEndpoint = async (req: any, res: Response) => {
+        const session = (req.session as MySession);
+        if (!session.pendingContracts || isEmpty(session.pendingContracts)) {
+            // TODO log
+            throw new BadRequestError("There are currently no pending contracts. Make them pending by validating.");
+        }
+
+        // don't care if values within are undefined, future version should be able to guess the address
+        const locations: ContractLocationMap = req.body.locations || {};
+
+        const validated: ContractWrapper[] = [];
+        const invalidIds: string[] = [];
+        for (const id in locations) {
+            const contractWrapper = session.pendingContracts[id];
+            if (id in session.pendingContracts && contractWrapper.contract.isValid()) {
+                validated.push(contractWrapper);
+            } else {
+                invalidIds.push(id);
+            }
+        }
+
+        if (invalidIds.length) {
+            return res.status(200).send({
+                msg: "Some pending contracts are invalid",
+                invalid: invalidIds
+            });
+        }
+
+        return this.verifyValidated(validated);
+    }
+
+    private verifyValidated(validatedContracts: ContractWrapper[]) {
+        // TODO this requires changing the interface of the inject method
+        return this.verificationService.inject(null, config.localchain.url).catch(); // TODO improve this catch
+    }
+
+    private extractFiles(req: Request): PathBuffer[] {
+        let pathBuffers: PathBuffer[];
+        if (req.files) {
+            if (!req.files.files) {
+                // TODO log
+                throw new BadRequestError('The uploaded files should be under the "files" property');
+            }
+            const fileArr: fileUpload.UploadedFile[] = [].concat(req.files.files); // ensure an array, regardless of how many files received
+            pathBuffers = fileArr.map(f => ({ path: f.name, buffer: f.data }));
+
+        } else if (req.body.files) {
+            pathBuffers = [];
+            for (const name in req.body.files) {
+                const buffer = Buffer.from(req.body.files[name]);
+                pathBuffers.push({ path: name, buffer });
+            }
+
+        } else {
+            return null;
+        }
+
         return pathBuffers;
     }
 
-    getInputFilesEndpoint = async (req: Request, res: Response) => {
+    private saveFiles(pathBuffers: PathBuffer[], session: MySession): PathBuffer[] {
+        if (!session.inputFiles) {
+            session.inputFiles = {};
+        }
+        
+        let inputSize = 0; // shall contain old buffer size + new files size
+        const newPathBuffers: PathBuffer[] = [];
+        for (const id in session.inputFiles) {
+            const pb = session.inputFiles[id];
+            newPathBuffers.push(pb);
+            inputSize += pb.buffer.length;
+        }
+
+        pathBuffers.forEach(pb => inputSize += pb.buffer.length);
+
+        if (inputSize > VerificationController.MAX_INPUT_SIZE) {
+            const msg = "Too much session memory used. Delete some files or restart the session";
+            throw new BadRequestError(msg); // TODO 413 Payload Too Large
+        }
+
+        pathBuffers.forEach(pb => {
+            session.inputFiles[this.generateId()] = pb;
+            newPathBuffers.push(pb);
+        });
+
+        return newPathBuffers;
+    }
+
+    private generateId(): string {
+        return `${Date.now()}-${Math.random.toString().slice(2)}`;
+    }
+
+    private getInputFilesEndpoint = async (req: Request, res: Response) => {
         const inputFiles = (req.session as MySession).inputFiles || {};
         res.send(inputFiles);
     }
 
-    // TODO check size
-    addInputFilesEndpoint = async (req: Request, res: Response) => {
+    private addInputFilesEndpoint = async (req: Request, res: Response) => {
         if (!req.body.files) {
-            return res.send(400).send({ error: "No files provided" });
+            return res.status(400).send({ error: 'No "files" provided' });
         }
 
+        const pathBuffers = this.extractFiles(req);
         const session = (req.session as MySession);
-        if (!session.inputFiles) {
-            session.inputFiles = {};
-        }
-
-        req.body.files
+        this.saveFiles(pathBuffers, session);
     }
 
-    addInputFiles = async (req: Request) => {
-        const pathBuffers = this.extractPathBuffers(req);
-        // TODO add
-    }
-
-    updateUnused = async(req: Request, unused: string[]) => {
-        const session = (req.session as MySession);
+    private updateUnused(unused: string[], session: MySession) {
         if (!session.unusedSources) {
             session.unusedSources = [];
         }
         session.unusedSources = unused;
     }
 
-    // TODO type of property
-    deleteEndpoint = async (req: Request, res: Response, property: "pendingContracts" | "inputFiles") => {
-        const ids = req.body.ids;
+    private deleteEndpoint = async (req: Request, res: Response, property: keyof SessionMaps) => {
+        const ids: string[] = req.body.ids;
         if (!ids || !ids.length) {
             return res.status(400).send({ error: "No ids specified" });
         }
@@ -191,27 +311,34 @@ export default class VerificationController extends BaseController implements IC
         res.status(200).send({ remaining: Object.keys(objects) });
     }
 
-    deleteInputFilesEndpoint = async (req: Request, res: Response) => {
-        return this.deleteEndpoint(req, res, "inputFiles");
+    private deleteInputFilesEndpoint = async (req: Request, res: Response) => {
+        this.deleteEndpoint(req, res, "inputFiles");
     }
 
-    getPendingContractsEndpoint = async (req: Request, res: Response) => {
+    private getPendingContractsEndpoint = async (req: Request, res: Response) => {
         const pendingContracts = (req.session as MySession).pendingContracts || {};
         res.send(pendingContracts || {});
     }
 
-    deletePendingContractsEndpoint = async (req: Request, res: Response) => {
-        return this.deleteEndpoint(req, res, "pendingContracts");
+    private deletePendingContractsEndpoint = async (req: Request, res: Response) => {
+        this.deleteEndpoint(req, res, "pendingContracts");
     }
 
-    resetSessionEndpoint = async (req: Request, res: Response) => {
+    private startSessionEndpoint = async (req: Request, res: Response) => {
+        const session = (req.session as MySession);
+        const msg = session.started ? "Session already started" : "New session started";
+        session.started = true;
+        res.status(200).send(msg);
+    }
+
+    private resetSessionEndpoint = async (req: Request, res: Response) => {
         // TODO or simply delete req.session.nameOfProperty
         req.session.destroy((err: any) => {
-            let logMethod: "error" | "info" = null;
+            let logMethod: keyof bunyan = null;
             let msg = "";
             let statusCode = null;
 
-            const loggerOptions: any = { loc: "[VERIFICATION_CONTROLER]", id: req.sessionID };
+            const loggerOptions: any = { loc: "[VERIFICATION_CONTROLER:RESET]", id: req.sessionID };
             if (err) {
                 logMethod = "error";
                 msg = "Error in session destruction";
@@ -229,44 +356,16 @@ export default class VerificationController extends BaseController implements IC
         });
     }
 
-    getUnusedSourcesEndpoint = async (req: Request, res: Response) => {
+    private getUnusedSourcesEndpoint = async (req: Request, res: Response) => {
         const session = (req.session as MySession);
         res.send(session.unusedSources || []);
     }
 
-    getContractsEndpoint = async (req: Request, res: Response) => {
-        const session = (req.session as MySession);
-        res.send(session.pendingContracts || {});
-    }
-
-    deleteContractsEndpoint = async (req: Request, res: Response) => {
-        const session = (req.session as MySession);
-        const ids: string[] = req.body.ids;
-        if (!ids || !ids.length) {
-            return res.status(400).send({ error: "No ids specified" });
-        }
-
-        const illegal = [];
-        for (const id of ids) {
-            const deleted = delete session.pendingContracts[id];
-            if (!deleted) {
-                illegal.push(id);
-            }
-        }
-
-        if (illegal.length) {
-            res.status(400).send({ error: "Some contracts could not be deleted" })
-        }
-
-        return res.status(204);
-    }
-
     registerRoutes = (): Router => {
         this.router
-            .post([
-            ], this.safeHandler(this.verifyEndpoint));
+            .post([], this.safeHandler(this.legacyVerifyEndpoint));
         
-        this.router.route('/checkByAddresses')
+        this.router.route('/checkByAddresses') // TODO should change name to conventional (kebab instead of camel case)
             .get([], this.safeHandler(this.checkByAddresses));
         
         this.router.route('/files')
@@ -278,11 +377,20 @@ export default class VerificationController extends BaseController implements IC
             .get(this.safeHandler(this.getUnusedSourcesEndpoint));
         
         this.router.route('/contracts')
-            .get(this.safeHandler(this.getContractsEndpoint))
-            .delete(this.safeHandler(this.deleteContractsEndpoint));
+            .get(this.safeHandler(this.getPendingContractsEndpoint))
+            .delete(this.safeHandler(this.deletePendingContractsEndpoint));
         
-        this.router.route('/reset-verification-session')
+        this.router.route('/reset-session')
             .post(this.safeHandler(this.resetSessionEndpoint));
+        
+        this.router.route('/start-session')
+            .post(this.safeHandler(this.startSessionEndpoint));
+        
+        this.router.route('/validate')
+            .post(this.safeHandler(this.validateEndpoint));
+
+        this.router.route('/verify-validated')
+            .post(this.safeHandler(this.verifyValidatedEndpoint));
 
         return this.router;
     }
