@@ -46,7 +46,7 @@ export class Injector {
      * Await this method to work with an instance that has all chains initialized.
      * @param config 
      */
-    public static async createAsync(config: InjectorConfig = {}) {
+    public static async createAsync(config: InjectorConfig = {}): Promise<Injector> {
         const instance = new Injector(config);
         if (!instance.offline) {
             await instance.initChains();
@@ -194,98 +194,93 @@ export class Injector {
      * @param  {string[]}          files
      * @return {Promise<object>}              address & status of successfully verified contract
      */
-    public async inject(
-        inputData: InputData
-    ): Promise<Match[]> {
-        const { chain, addresses, contracts } = inputData;
+    public async inject(inputData: InputData): Promise<Match> {
+        const { chain, addresses, contract } = inputData;
         this.validateAddresses(addresses);
         this.validateChain(chain);
 
-        let matches: Match[];
+        let match: Match;
 
-        for (const contract of contracts) {
-            let match: Match;
+        // Starting from here, we cannot trust the metadata object anymore,
+        // because it is modified inside recompile.
+        const target = Object.assign({}, contract.metadata.settings.compilationTarget);
+        
+        // target is expected to have been checked in validation (size 1 assertion)
 
-            // Starting from here, we cannot trust the metadata object anymore,
-            // because it is modified inside recompile.
-            const target = Object.assign({}, contract.metadata.settings.compilationTarget);
-            
-            // target is expected to have been checked in validation (size 1 assertion)
-
-            if (!contract.isValid()) {
-                // eslint-disable-next-line no-useless-catch
-                try {
-                    await contract.fetchMissing(this.log);
-                } catch(err) {
-                    throw err;
-                }
-            }
-
-            let compilationResult: RecompilationResult;
+        if (!contract.isValid()) {
+            // eslint-disable-next-line no-useless-catch
             try {
-                compilationResult = await recompile(contract.metadata, contract.solidity, this.log)
-            } catch (err) {
-                this.log.info({ loc: `[RECOMPILE]`, err: err });
+                await contract.fetchMissing(this.log);
+            } catch(err) {
                 throw err;
             }
+        }
 
-            // When injector is called by monitor, the bytecode has already been
-            // obtained for address and we only need to compare w/ compilation result.
-            if (inputData.bytecode) {
+        let compilationResult: RecompilationResult;
+        try {
+            compilationResult = await recompile(contract.metadata, contract.solidity, this.log)
+        } catch (err) {
+            this.log.error({ loc: `[RECOMPILE]`, err: err });
+            throw err;
+        }
 
+        // When injector is called by monitor, the bytecode has already been
+        // obtained for address and we only need to compare w/ compilation result.
+        if (inputData.bytecode) {
+
+            for (const address of addresses) {
                 const status = this.compareBytecodes(
                     inputData.bytecode,
                     compilationResult.deployedBytecode
-                )
-
-                match = {
-                    address: Web3.utils.toChecksumAddress(addresses[0]),
-                    status: status
-                }
-
-                // For other cases, we need to retrieve the code for specified address
-                // from the chain.
-            } else {
-                match = await this.matchBytecodeToAddress(
-                    chain,
-                    addresses,
-                    compilationResult.deployedBytecode
-                )
-            }
-
-            // Since the bytecode matches, we can be sure that we got the right
-            // metadata file (up to json formatting) and exactly the right sources.
-            // Now we can store the re-compiled and correctly formatted metadata file
-            // and the sources.
-            if (match.address && match.status === 'perfect') {
-
-                this.storePerfectMatchData(this.repositoryPath, chain, match.address, compilationResult, contract.solidity)
-
-            } else if (match.address && match.status === 'partial') {
-
-                this.storePartialMatchData(this.repositoryPath, chain, match.address, compilationResult, contract.solidity)
-
-            } else {
-                const err = new Error(
-                    `Could not match on-chain deployed bytecode to recompiled bytecode for:\n` +
-                    `${JSON.stringify(target, null, ' ')}\n` +
-                    `Addresses checked:\n` +
-                    `${JSON.stringify(addresses, null, ' ')}`
                 );
-
-                this.log.info({
-                    loc: '[INJECT]',
-                    chain: chain,
-                    addresses: addresses,
-                    err: err
-                })
-
-                throw new Error(err.message);
+                const checkedAddress = Web3.utils.toChecksumAddress(addresses[0]);
+                match = { address: checkedAddress, status };
+                if (match.status) {
+                    break;
+                }
             }
 
-            matches.push(match);
+            // For other cases, we need to retrieve the code for specified address
+            // from the chain.
+        } else {
+            match = await this.matchBytecodeToAddress(
+                chain,
+                addresses,
+                compilationResult.deployedBytecode
+            );
         }
-        return matches;
+
+        // Since the bytecode matches, we can be sure that we got the right
+        // metadata file (up to json formatting) and exactly the right sources.
+        // Now we can store the re-compiled and correctly formatted metadata file
+        // and the sources.
+        if (match.address && match.status === 'perfect') {
+
+            this.storePerfectMatchData(this.repositoryPath, chain, match.address, compilationResult, contract.solidity)
+
+        } else if (match.address && match.status === 'partial') {
+
+            this.storePartialMatchData(this.repositoryPath, chain, match.address, compilationResult, contract.solidity)
+
+        } else {
+            const err = new Error(
+                `Could not match on-chain deployed bytecode to recompiled bytecode for:\n` +
+                `${JSON.stringify(target, null, ' ')}\n` +
+                `Addresses checked:\n` +
+                `${JSON.stringify(addresses, null, ' ')}`
+            );
+
+            this.log.info({
+                loc: '[INJECT]',
+                chain: chain,
+                addresses: addresses,
+                err: err
+            })
+
+            throw new Error(err.message);
+        }
+
+        return match;
     }
 
     /**

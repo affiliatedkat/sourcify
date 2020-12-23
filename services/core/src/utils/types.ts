@@ -10,7 +10,7 @@ export interface FileObject {
 export interface InputData {
     chain: string,
     addresses: string[],
-    contracts?: CheckedContract[],
+    contract?: CheckedContract,
     bytecode?: string;
 }
 
@@ -49,7 +49,8 @@ export interface SourceMap {
 
 export interface Match {
   address: string | null,
-  status: 'perfect' | 'partial' | null
+  status: 'perfect' | 'partial' | null,
+  message?: string
 }
 
 export interface MonitorConfig {

@@ -2,7 +2,7 @@ import { NextFunction, Request, Response, Router } from 'express';
 import BaseController from './BaseController';
 import { IController } from '../../common/interfaces';
 import { IVerificationService } from '@ethereum-sourcify/verification';
-import { InputData, getChainId, Logger, PathBuffer, CheckedContract, isEmpty } from '@ethereum-sourcify/core';
+import { InputData, getChainId, Logger, PathBuffer, CheckedContract, isEmpty, Match } from '@ethereum-sourcify/core';
 import { BadRequestError, NotFoundError } from '../../common/errors'
 import { IValidationService } from '@ethereum-sourcify/validation';
 import * as bunyan from 'bunyan';
@@ -11,31 +11,32 @@ import fileUpload from 'express-fileupload';
 import { Session } from 'express-session';
 import { isValidAddress } from '../../common/validators/validators';
 
-type ContractLocation = {
-    chain: string,
-    address: string
-}
-
-type ContractWrapper =
-    ContractLocation & {
-    contract: CheckedContract,
-};
-
-interface ContractLocationMap {
-    [id: string]: ContractLocation;
-}
-
-interface ContractMap {
-    [id: string]: ContractWrapper;
-}
-
 interface PathBufferMap {
     [id: string]: PathBuffer;
 }
 
+type ContractLocation = {
+    chain: string,
+    address: string
+}
+  
+type ContractWrapper =
+    ContractLocation & {
+    contract: CheckedContract,
+    valid: boolean
+};
+  
+interface ContractLocationMap {
+    [id: string]: ContractLocation;
+}
+
+interface ContractWrapperMap {
+    [id: string]: ContractWrapper;
+}
+
 type SessionMaps = {
     inputFiles: PathBufferMap;
-    pendingContracts: ContractMap;
+    pendingContracts: ContractWrapperMap;
 };
 
 type MySession = 
@@ -45,13 +46,17 @@ type MySession =
     started: boolean
 };
 
+interface MatchMap {
+    [id: string]: Match;
+}
+
 export default class VerificationController extends BaseController implements IController {
     router: Router;
     verificationService: IVerificationService;
     validationService: IValidationService;
     logger: bunyan;
 
-    private static readonly MAX_INPUT_SIZE = 10 * 1024 * 1024; // 10 MB
+    private static readonly MAX_INPUT_SIZE = 2 * 1024 * 1024; // 2 MB
 
     constructor(verificationService: IVerificationService, validationService: IValidationService) {
         super();
@@ -71,25 +76,23 @@ export default class VerificationController extends BaseController implements IC
 
         const address = req.body.address;
         if (!isValidAddress(address)) {
-            return next("Invalid address provided: " + address);
+            return next(new BadRequestError("Invalid address provided: " + address));
         }
 
         const result = await this.verificationService.findByAddress(address, chain, config.repository.path);
         if (result.length != 0) {
             res.status(200).send({ result });
         } else {
-            const session = req.session as MySession;
-            let inputFiles: PathBuffer[] = null;
+            let inputFiles: PathBuffer[];
             try {
-                const extracted = this.extractFiles(req);
-                if (!extracted) {
-                    const msg = "The contract at the provided address has not yet been sourcified.";
-                    return next(new NotFoundError(msg));
-                }
-                
-                inputFiles = session.started ? this.saveFiles(extracted, session) : extracted;
+                inputFiles = this.extractFiles(req);
             } catch(err) {
                 return next(err);
+            }
+
+            if (!inputFiles) {
+                const msg = "The contract at the provided address has not yet been sourcified.";
+                return next(new NotFoundError(msg));
             }
             
             const validatedContracts = this.validationService.checkFiles(inputFiles);
@@ -101,15 +104,21 @@ export default class VerificationController extends BaseController implements IC
                 return next(new BadRequestError("Errors in:\n" + errors.join("\n"), false));
             }
 
+            if (validatedContracts.length !== 1) {
+                const contractNames = validatedContracts.map(c => c.name).join(", ");
+                const msg = `Detected ${validatedContracts.length} contracts (${contractNames}), but can only verify 1 at a time.`;
+                return next(new BadRequestError(msg));
+            }
+
             const inputData: InputData = {
-                contracts: validatedContracts,
+                contract: validatedContracts[0],
                 addresses: [address],
                 chain
             };
 
             const resultPromise = this.verificationService.inject(inputData, config.localchain.url);
             resultPromise.then(result => {
-                res.status(200).send({ result });
+                res.status(200).send({ result }); // TODO should this be Match[] or Match?
             }).catch(err => {
                 res.status(500).send({ err }); // TODO the property name of the sent object
             });
@@ -165,9 +174,25 @@ export default class VerificationController extends BaseController implements IC
             pathBuffers.push(session.inputFiles[id]);
         }
         
-        const unused: string[] = [];
-        this.validationService.checkFiles(pathBuffers, unused);
-        this.updateUnused(unused, session);
+        try {
+            const unused: string[] = [];
+            const contracts = this.validationService.checkFiles(pathBuffers, unused);
+
+            for (const contract of contracts) {
+                session.pendingContracts[this.generateId()] = {
+                    address: undefined, // TODO should guess the address?
+                    chain: undefined,
+                    contract,
+                    valid: contract.isValid()
+                }
+            }
+
+            this.updateUnused(unused, session);
+            
+            res.status(200).send({ contracts: session.pendingContracts, unused });
+        } catch(error) {
+            throw new BadRequestError(error);
+        }
     }
 
     private verifyValidatedEndpoint = async (req: any, res: Response) => {
@@ -177,33 +202,89 @@ export default class VerificationController extends BaseController implements IC
             throw new BadRequestError("There are currently no pending contracts. Make them pending by validating.");
         }
 
+        const ids = req.body.ids;
+        if (!ids || !ids.length) {
+            // TODO log
+            throw new BadRequestError("No ids specified");
+        }
+
+        const notFoundIds: string[] = [];
+        for (const id of ids) {
+            if (!session.pendingContracts[id]) {
+                notFoundIds.push(id);
+            }
+        }
+        
+        if (notFoundIds.length) {
+            const msg = "Some contract ids were not found";
+            // TODO log
+            return res.status(404).send({ error: msg, ids: notFoundIds })
+        }
+
         // don't care if values within are undefined, future version should be able to guess the address
         const locations: ContractLocationMap = req.body.locations || {};
-
-        const validated: ContractWrapper[] = [];
-        const invalidIds: string[] = [];
+        const invalidLocations: string[] = [];
         for (const id in locations) {
+            const contract = session.pendingContracts[id];
+            if (contract) {
+                contract.address = locations[id].address;
+                contract.chain = locations[id].chain;
+            } else {
+                invalidLocations.push(id);
+            }
+        }
+
+        if (invalidLocations.length) {
+            // TODO log
+            const msg = "Invalid ids used as keys in the locations property";
+            return res.status(404).send({ error: msg, ids: invalidLocations })
+        }
+
+        const validated: ContractWrapperMap = {};
+        const invalidIds: string[] = [];
+        for (const id in session.pendingContracts) {
             const contractWrapper = session.pendingContracts[id];
             if (id in session.pendingContracts && contractWrapper.contract.isValid()) {
-                validated.push(contractWrapper);
+                validated[id] = contractWrapper;
             } else {
                 invalidIds.push(id);
             }
         }
 
         if (invalidIds.length) {
-            return res.status(200).send({
-                msg: "Some pending contracts are invalid",
+            return res.status(400).send({
+                msg: "Some ids do not belong to valid contracts",
                 invalid: invalidIds
             });
         }
 
-        return this.verifyValidated(validated);
+        const result = await this.verifyValidated(validated);
+        res.status(200).send({ result });
     }
 
-    private verifyValidated(validatedContracts: ContractWrapper[]) {
-        // TODO this requires changing the interface of the inject method
-        return this.verificationService.inject(null, config.localchain.url).catch(); // TODO improve this catch
+    private async verifyValidated(contractWrappers: ContractWrapperMap): Promise<MatchMap> {
+        const matches: MatchMap = {};
+        for (const id in contractWrappers) {
+            const { address, chain, contract } = contractWrappers[id];
+
+            const inputData: InputData = {
+                contract: contract,
+                addresses: [address],
+                chain
+            };
+
+            const matchPromise = this.verificationService.inject(inputData, config.localchain.url); 
+            const match: Match = await matchPromise.catch(err => {
+                return {
+                    status: null,
+                    address,
+                    message: err.message
+                };
+            });
+            matches[id] = match;
+        }
+
+        return matches;
     }
 
     private extractFiles(req: Request): PathBuffer[] {
