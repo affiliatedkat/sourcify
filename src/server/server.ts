@@ -10,6 +10,7 @@ import bunyan from 'bunyan';
 import genericErrorHandler from './middlewares/GenericErrorHandler';
 import notFoundHandler from './middlewares/NotFoundError';
 import session from 'express-session';
+import util from 'util';
 
 export const logger: bunyan = Logger("Server");
 export class Server {
@@ -41,7 +42,12 @@ export class Server {
     this.app.use('/', routes);
     this.app.use(genericErrorHandler);
     this.app.use(notFoundHandler);
-    this.app.listen(this.port, () => logger.info({loc: '[LISTEN]'}, `Injector listening on port ${this.port}!`))
+  }
+
+  async listen(callback?: () => void) {
+    const promisified: any = util.promisify(this.app.listen);
+    await promisified(this.port);
+    if (callback) callback();
   }
 }
 
@@ -61,4 +67,7 @@ function getSessionOptions(): session.SessionOptions {
 
 if (require.main === module) {
   const server = new Server();
+  console.log("DEBUG calling listen");
+  server.app.listen(server.port, () => logger.info({loc: '[LISTEN]'}, `Injector listening on port ${server.port}!`))
+  console.log("DEBUG listen called");
 }

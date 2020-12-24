@@ -1,3 +1,54 @@
+// const chai = require("chai");
+// const chaiHttp = require("chai-http");
+// const Server = require("../dist/server/server").Server;
+// chai.use(chaiHttp);
+
+// // howto: https://www.digitalocean.com/community/tutorials/test-a-node-restful-api-with-mocha-and-chai
+// // howto-sessions: https://stackoverflow.com/questions/39662286/mocha-chai-request-and-express-session
+
+// describe("Server", async () => {
+//     // TODO beforeEach - clean mock repo
+
+//     const server = new Server();
+//     await server.listen();
+
+//     describe("/checkByAddress", () => {
+//         it("should fail for missing chainIds", (done) => {
+//             chai.request(server.app)
+//                 .get(`/checkByAddresses?addresses=123`)
+//                 .end((err, res) => {
+//                     chai.expect(err).to.be.null;
+//                     chai.expect(res.status).to.equal(400);
+//                     chai.expect(res.body.error).to.contain("chainIds");
+//                     chai.expect(res.body.error).to.not.contain("addresses");
+//                     done();
+//                 });
+//         });
+
+//         it("should fail for missing addresses", (done) => {
+//             chai.request(server.app)
+//                 .get(`/checkByAddresses?chainIds=1`)
+//                 .end((err, res) => {
+//                     chai.expect(err).to.be.null;
+//                     chai.expect(res.status).to.equal(400);
+//                     chai.expect(res.body.error).to.contain("addresses");
+//                     chai.expect(res.body.error).to.not.contain("chainIds");
+//                     done();
+//                 });
+//         });
+
+//         // it("should succeed for ", (done) => {
+//         //     chai.request(server.app)
+//         //         .get(`/checkByAddresses?`) // TODO combine this with prior upload
+//         //         .end((err, res) => {
+//         //             chai.expect(err).to.be.null;
+//         //             chai.expect(res.status).to.equal(200);
+//         //             done();
+//         //         });
+//         // });
+//     })
+// });
+
 // process.env.TESTING = true;
 // process.env.LOCALCHAIN_URL = "http://localhost:8545";
 // process.env.MOCK_REPOSITORY = './mockRepository';
