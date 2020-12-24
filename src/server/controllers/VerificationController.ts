@@ -1,4 +1,4 @@
-import { NextFunction, Request, Response, Router } from 'express';
+import { Request, Response, Router } from 'express';
 import BaseController from './BaseController';
 import { IController } from '../../common/interfaces';
 import { IVerificationService } from '@ethereum-sourcify/verification';
@@ -66,71 +66,81 @@ export default class VerificationController extends BaseController implements IC
         this.logger = Logger("VerificationService");
     }
 
-    private legacyVerifyEndpoint = async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+    private validateChainAndAddress(req: Request) : { chain: string, address: string } {
+        const missingParams = ["address", "chain"].filter(p => !req.body[p]);
+        if (missingParams.length) {
+            const message = `Missing body parameters: ${missingParams.join(", ")}`;
+            throw new BadRequestError(message);
+        }
+
         let chain;
         try {
             chain = getChainId(req.body.chain);
         } catch (error) {
-            return next(error);
+            throw new BadRequestError(error.message);
         }
 
         const address = req.body.address;
         if (!isValidAddress(address)) {
-            return next(new BadRequestError("Invalid address provided: " + address));
+            throw new BadRequestError("Invalid address provided: " + address);
         }
+
+        return { chain, address };
+    }
+
+    private legacyVerifyEndpoint = async (req: Request, res: Response): Promise<any> => {
+        const { address, chain } = this.validateChainAndAddress(req);
 
         const result = await this.verificationService.findByAddress(address, chain, config.repository.path);
         if (result.length != 0) {
-            res.status(200).send({ result });
-        } else {
-            let inputFiles: PathBuffer[];
-            try {
-                inputFiles = this.extractFiles(req);
-            } catch(err) {
-                return next(err);
-            }
+            return res.status(200).send({ result });
+        } 
 
-            if (!inputFiles) {
-                const msg = "The contract at the provided address has not yet been sourcified.";
-                return next(new NotFoundError(msg));
-            }
-            
-            const validatedContracts = this.validationService.checkFiles(inputFiles);
-            const errors = validatedContracts
-                            .filter(contract => Object.keys(contract.invalid).length)
-                            .map(contract => `${contract.name} ${Object(contract.invalid).keys()}`);
-
-            if (errors.length) {
-                return next(new BadRequestError("Errors in:\n" + errors.join("\n"), false));
-            }
-
-            if (validatedContracts.length !== 1) {
-                const contractNames = validatedContracts.map(c => c.name).join(", ");
-                const msg = `Detected ${validatedContracts.length} contracts (${contractNames}), but can only verify 1 at a time.`;
-                return next(new BadRequestError(msg));
-            }
-
-            const inputData: InputData = {
-                contract: validatedContracts[0],
-                addresses: [address],
-                chain
-            };
-
-            const resultPromise = this.verificationService.inject(inputData, config.localchain.url);
-            resultPromise.then(result => {
-                res.status(200).send({ result }); // TODO should this be Match[] or Match?
-            }).catch(err => {
-                res.status(500).send({ err }); // TODO the property name of the sent object
-            });
+        const inputFiles = this.extractFiles(req); // throws
+        if (!inputFiles) {
+            const msg = "The contract at the provided address has not yet been sourcified.";
+            throw new NotFoundError(msg);
         }
 
+        let validatedContracts: CheckedContract[];
+        try {
+            validatedContracts = this.validationService.checkFiles(inputFiles);
+        } catch(error) {
+            throw new BadRequestError(error.message);
+        }
+
+        const errors = validatedContracts
+                        .filter(contract => Object.keys(contract.invalid).length)
+                        .map(contract => `${contract.name} ${Object(contract.invalid).keys()}`);
+        if (errors.length) {
+            throw new BadRequestError("Errors in:\n" + errors.join("\n"), false);
+        }
+
+        if (validatedContracts.length !== 1) {
+            const contractNames = validatedContracts.map(c => c.name).join(", ");
+            const msg = `Detected ${validatedContracts.length} contracts (${contractNames}), but can only verify 1 at a time.`;
+            throw new BadRequestError(msg);
+        }
+
+        const inputData: InputData = {
+            contract: validatedContracts[0],
+            addresses: [address],
+            chain
+        };
+
+        const resultPromise = this.verificationService.inject(inputData, config.localchain.url);
+        resultPromise.then(result => {
+            res.status(200).send({ result: [result] }); // TODO frontend expects an array
+        }).catch(error => {
+            res.status(500).send({ error: error.message });
+        });
     }
 
     private checkByAddresses = async (req: any, res: Response) => {
         const missingParams = ["addresses", "chainIds"].filter(p => !req.query[p]);
-        if (missingParams) {
-            const msg = `Missing query parameters: ${missingParams.join(", ")}`;
-            return res.status(400).send({ error: msg });
+        if (missingParams.length) {
+            const message = `Missing query parameters: ${missingParams.join(", ")}`;
+            throw new BadRequestError(message);
         }
         let resultArray: Array<Object> = [];
         const map: Map<string, Object> = new Map();
@@ -443,7 +453,7 @@ export default class VerificationController extends BaseController implements IC
     }
 
     registerRoutes = (): Router => {
-        this.router
+        this.router.route('/')
             .post([], this.safeHandler(this.legacyVerifyEndpoint));
         
         this.router.route('/checkByAddresses') // TODO should change name to conventional (kebab instead of camel case)
@@ -464,13 +474,13 @@ export default class VerificationController extends BaseController implements IC
         this.router.route('/reset-session')
             .post(this.safeHandler(this.resetSessionEndpoint));
         
-        this.router.route('/start-session')
+        this.router.route('/start-session') // TODO perhaps remove this if it's only going to be used from browser
             .post(this.safeHandler(this.startSessionEndpoint));
         
         this.router.route('/validate')
             .post(this.safeHandler(this.validateEndpoint));
 
-        this.router.route('/verify-validated')
+        this.router.route('/verify-validated') // TODO rename to /verify
             .post(this.safeHandler(this.verifyValidatedEndpoint));
 
         return this.router;
