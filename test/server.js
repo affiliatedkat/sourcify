@@ -1,8 +1,8 @@
-// process.env.MOCK_REPOSITORY = './data/mock-repository';
 process.env.TESTING = true;
 process.env.LOCALCHAIN_URL = "http://localhost:8545";
-process.env.MOCK_REPOSITORY = './mockRepository';
-process.env.MOCK_DATABASE = './mockDatabase';
+process.env.MOCK_REPOSITORY = './data/mock-repository';
+process.env.MOCK_DATABASE = './data/mock-database';
+
 const chai = require("chai");
 const chaiHttp = require("chai-http");
 const Server = require("../dist/server/server").Server;

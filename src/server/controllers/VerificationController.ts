@@ -139,7 +139,7 @@ export default class VerificationController extends BaseController implements IC
     private checkByAddresses = async (req: any, res: Response) => {
         const missingParams = ["addresses", "chainIds"].filter(p => !req.query[p]);
         if (missingParams.length) {
-            const message = `Missing query parameters: ${missingParams.join(", ")}`;
+            const message = `Missing query parameters: ${missingParams.join(",")}`;
             throw new BadRequestError(message);
         }
 
@@ -208,7 +208,7 @@ export default class VerificationController extends BaseController implements IC
             
             res.status(200).send({ contracts: session.pendingContracts, unused });
         } catch(error) {
-            throw new BadRequestError(error);
+            throw new BadRequestError(error.message);
         }
     }
 
