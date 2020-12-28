@@ -132,7 +132,7 @@ export default class VerificationController extends BaseController implements IC
         resultPromise.then(result => {
             res.status(200).send({ result: [result] }); // TODO frontend expects an array
         }).catch(error => {
-            res.status(500).send({ error: error.message });
+            res.status(400).send({ error: error.message });
         });
     }
 
@@ -306,7 +306,10 @@ export default class VerificationController extends BaseController implements IC
 
     private extractFiles(req: Request): PathBuffer[] {
         let pathBuffers: PathBuffer[];
-        if (req.files) {
+        if (req.is('multipart/form-data')) {
+            if (!req.files) {
+                return null; // user only wants to check if the address has been verified
+            }
             if (!req.files.files) {
                 // TODO log
                 throw new BadRequestError('The uploaded files should be under the "files" property');
@@ -314,15 +317,20 @@ export default class VerificationController extends BaseController implements IC
             const fileArr: fileUpload.UploadedFile[] = [].concat(req.files.files); // ensure an array, regardless of how many files received
             pathBuffers = fileArr.map(f => ({ path: f.name, buffer: f.data }));
 
-        } else if (req.body.files) {
+        } else if (req.is('application/json')) {
+            if (!req.body.files) {
+                // TODO log
+                throw new BadRequestError('The uploaded files should be under the "files" property');
+            }
             pathBuffers = [];
             for (const name in req.body.files) {
-                const buffer = Buffer.from(req.body.files[name]);
+                const file = req.body.files[name];
+                const buffer = (Buffer.isBuffer(file) ? file : Buffer.from(file));
                 pathBuffers.push({ path: name, buffer });
             }
 
         } else {
-            return null;
+            throw new BadRequestError("Cannot perform the request for the provided Content-Type");
         }
 
         return pathBuffers;
