@@ -1,53 +1,83 @@
-// const chai = require("chai");
-// const chaiHttp = require("chai-http");
-// const Server = require("../dist/server/server").Server;
-// chai.use(chaiHttp);
+// process.env.MOCK_REPOSITORY = './data/mock-repository';
+process.env.TESTING = true;
+process.env.LOCALCHAIN_URL = "http://localhost:8545";
+process.env.MOCK_REPOSITORY = './mockRepository';
+process.env.MOCK_DATABASE = './mockDatabase';
+const chai = require("chai");
+const chaiHttp = require("chai-http");
+const Server = require("../dist/server/server").Server;
+const util = require("util");
+chai.use(chaiHttp);
 
-// // howto: https://www.digitalocean.com/community/tutorials/test-a-node-restful-api-with-mocha-and-chai
-// // howto-sessions: https://stackoverflow.com/questions/39662286/mocha-chai-request-and-express-session
+// howto: https://www.digitalocean.com/community/tutorials/test-a-node-restful-api-with-mocha-and-chai
+// howto-sessions: https://stackoverflow.com/questions/39662286/mocha-chai-request-and-express-session
 
-// describe("Server", async () => {
-//     // TODO beforeEach - clean mock repo
+describe("Server", async () => {
+    // TODO beforeEach - clean mock repo
 
-//     const server = new Server();
-//     await server.listen();
+    const server = new Server();
+    // await server.listen();
+    const promisified = util.promisify(server.app.listen);
+    await promisified(server.port);
+    console.log(`Injector listening on port ${server.port}!`);
 
-//     describe("/checkByAddress", () => {
-//         it("should fail for missing chainIds", (done) => {
-//             chai.request(server.app)
-//                 .get(`/checkByAddresses?addresses=123`)
-//                 .end((err, res) => {
-//                     chai.expect(err).to.be.null;
-//                     chai.expect(res.status).to.equal(400);
-//                     chai.expect(res.body.error).to.contain("chainIds");
-//                     chai.expect(res.body.error).to.not.contain("addresses");
-//                     done();
-//                 });
-//         });
+    describe("/checkByAddress", () => {
+        it("should fail for missing chainIds", (done) => {
+            chai.request(server.app)
+                .get("/checkByAddresses?addresses=123")
+                .end((err, res) => {
+                    chai.expect(err).to.be.null;
+                    chai.expect(res.status).to.equal(400);
+                    const errorMessage = res.body.error.toLowerCase();
+                    chai.expect(errorMessage).to.contain("chainids");
+                    chai.expect(errorMessage).to.not.contain("addresses");
+                    done();
+                });
+        });
 
-//         it("should fail for missing addresses", (done) => {
-//             chai.request(server.app)
-//                 .get(`/checkByAddresses?chainIds=1`)
-//                 .end((err, res) => {
-//                     chai.expect(err).to.be.null;
-//                     chai.expect(res.status).to.equal(400);
-//                     chai.expect(res.body.error).to.contain("addresses");
-//                     chai.expect(res.body.error).to.not.contain("chainIds");
-//                     done();
-//                 });
-//         });
+        it("should fail for missing addresses", (done) => {
+            chai.request(server.app)
+                .get("/checkByAddresses?chainIds=1")
+                .end((err, res) => {
+                    chai.expect(err).to.be.null;
+                    chai.expect(res.status).to.equal(400);
+                    const errorMessage = res.body.error.toLowerCase();
+                    chai.expect(errorMessage).to.contain("addresses");
+                    chai.expect(errorMessage).to.not.contain("chainids");
+                    done();
+                });
+        });
 
-//         // it("should succeed for ", (done) => {
-//         //     chai.request(server.app)
-//         //         .get(`/checkByAddresses?`) // TODO combine this with prior upload
-//         //         .end((err, res) => {
-//         //             chai.expect(err).to.be.null;
-//         //             chai.expect(res.status).to.equal(200);
-//         //             done();
-//         //         });
-//         // });
-//     })
-// });
+        const xdaiAddress = "0x656d0062eC89c940213E3F3170EA8b2add1c0143";
+        it("should return false for previously unverified contract", (done) => {
+            chai.request(server.app)
+                .get(`/checkByAddresses?chainIds=100&addresses=${xdaiAddress}`) // TODO combine this with prior upload
+                .end((err, res) => {
+                    chai.expect(err).to.be.null;
+                    chai.expect(res.status).to.equal(200);
+                    const resultArray = res.body;
+                    chai.expect(resultArray.length).to.equal(1);
+                    const result = resultArray[0];
+                    chai.expect(result.address).to.equal(xdaiAddress);
+                    chai.expect(result.status).to.equal("false");
+                    done();
+                });
+        });
+
+        it("should fail for invalid address", (done) => {
+            chai.request(server.app)
+                .get("/checkByAddresses?chainIds=100&addresses=0x656d0062eC89c940213E3F3170EA8b2add1c0142")
+                .end((err, res) => {
+                    chai.expect(err).to.be.null;
+                    chai.expect(res.status).to.equal(400);
+                    const errorMessage = res.body.error.toLowerCase();
+                    chai.expect(errorMessage).to.contain("invalid");
+                    chai.expect(errorMessage).to.contain("address");
+                    done();
+                });
+        });
+    });
+});
 
 // process.env.TESTING = true;
 // process.env.LOCALCHAIN_URL = "http://localhost:8545";

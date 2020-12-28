@@ -67,7 +67,5 @@ function getSessionOptions(): session.SessionOptions {
 
 if (require.main === module) {
   const server = new Server();
-  console.log("DEBUG calling listen");
   server.app.listen(server.port, () => logger.info({loc: '[LISTEN]'}, `Injector listening on port ${server.port}!`))
-  console.log("DEBUG listen called");
 }

@@ -142,9 +142,16 @@ export default class VerificationController extends BaseController implements IC
             const message = `Missing query parameters: ${missingParams.join(", ")}`;
             throw new BadRequestError(message);
         }
-        let resultArray: Array<Object> = [];
+
+        const addresses: string[] = req.query.addresses.split(",");
+        const invalidAddresses = addresses.filter(a => !isValidAddress(a));
+        if (invalidAddresses.length) {
+            const message = `Invalid addresses: ${invalidAddresses.join(",")}`;
+            throw new BadRequestError(message);
+        }
+
         const map: Map<string, Object> = new Map();
-        for (const address of req.query.addresses.split(',')) {
+        for (const address of addresses) {
             for (const chainId of req.query.chainIds.split(',')) {
                 try {
                     const object: any = await this.verificationService.findByAddress(address, chainId, config.repository.path);
@@ -164,7 +171,7 @@ export default class VerificationController extends BaseController implements IC
                 })
             }
         }
-        resultArray = Array.from(map.values())
+        const resultArray = Array.from(map.values());
         res.send(resultArray)
     }
 
