@@ -8,47 +8,8 @@ import { IValidationService } from '@ethereum-sourcify/validation';
 import * as bunyan from 'bunyan';
 import config from '../../config';
 import fileUpload from 'express-fileupload';
-import { Session } from 'express-session';
 import { isValidAddress } from '../../common/validators/validators';
-
-interface PathBufferMap {
-    [id: string]: PathBuffer;
-}
-
-type ContractLocation = {
-    chain: string,
-    address: string
-}
-  
-type ContractWrapper =
-    ContractLocation & {
-    contract: CheckedContract,
-    valid: boolean
-};
-  
-interface ContractLocationMap {
-    [id: string]: ContractLocation;
-}
-
-interface ContractWrapperMap {
-    [id: string]: ContractWrapper;
-}
-
-type SessionMaps = {
-    inputFiles: PathBufferMap;
-    pendingContracts: ContractWrapperMap;
-};
-
-type MySession = 
-    Session &
-    SessionMaps & { 
-    unusedSources: string[],
-    started: boolean
-};
-
-interface MatchMap {
-    [id: string]: Match;
-}
+import { ContractLocationMap, MySession, MatchMap, ContractWrapperMap, SessionMaps } from './verification-types';
 
 export default class VerificationController extends BaseController implements IController {
     router: Router;
