@@ -114,6 +114,18 @@ export class CheckedContract {
         return standardJson;
     }
 
+    public getSendableJSON() {
+        return {
+            compiledPath: this.compiledPath,
+            name: this.name,
+            foundSources: Object.keys(this.solidity).length,
+            missingSources: this.missing,
+            invalidSources: this.invalid,
+            compilerVersion: this.compilerVersion,
+            valid: this.isValid()
+        }
+    }
+
     /**
      * Constructs the message to be displayed in case of a successful finding
      * of source files related to the provided metadata file.

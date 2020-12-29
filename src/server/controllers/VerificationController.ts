@@ -9,7 +9,7 @@ import * as bunyan from 'bunyan';
 import config from '../../config';
 import fileUpload from 'express-fileupload';
 import { isValidAddress } from '../../common/validators/validators';
-import { ContractLocationMap, MySession, MatchMap, ContractWrapperMap, SessionMaps, getSessionJSON } from './VerificationControler-util';
+import { ContractLocationMap, MySession, MatchMap, ContractWrapperMap, SessionMaps, getSessionJSON, generateId, isValidContract } from './VerificationControler-util';
 
 export default class VerificationController extends BaseController implements IController {
     router: Router;
@@ -147,10 +147,6 @@ export default class VerificationController extends BaseController implements IC
             throw new BadRequestError("No input files to use for validation.");
         }
 
-        if (!session.pendingContracts) {
-            session.pendingContracts = {};
-        }
-
         const pathBuffers: PathBuffer[] = [];
         for (const id in session.inputFiles) {
             pathBuffers.push(session.inputFiles[id]);
@@ -160,16 +156,15 @@ export default class VerificationController extends BaseController implements IC
             const unused: string[] = [];
             const contracts = this.validationService.checkFiles(pathBuffers, unused);
 
+            const newPendingContracts: ContractWrapperMap = {};
             for (const contract of contracts) {
-                session.pendingContracts[this.generateId()] = {
+                newPendingContracts[generateId(contract.metadata)] = {
                     address: undefined, // TODO should guess the address?
                     chain: undefined,
-                    contract,
-                    compilerVersion: contract.compilerVersion,
-                    valid: contract.isValid()
+                    contract
                 }
             }
-
+            session.pendingContracts = newPendingContracts;
             this.updateUnused(unused, session);
             
             res.status(200).send(getSessionJSON(session));
@@ -178,7 +173,7 @@ export default class VerificationController extends BaseController implements IC
         }
     }
 
-    private verifyValidatedEndpoint = async (req: any, res: Response) => {
+    private verifyValidatedEndpoint = async (req: Request, res: Response) => {
         const session = (req.session as MySession);
         if (!session.pendingContracts || isEmpty(session.pendingContracts)) {
             // TODO log
@@ -227,7 +222,7 @@ export default class VerificationController extends BaseController implements IC
         const invalidIds: string[] = [];
         for (const id in session.pendingContracts) {
             const contractWrapper = session.pendingContracts[id];
-            if (id in session.pendingContracts && contractWrapper.contract.isValid()) {
+            if ((id in session.pendingContracts) && isValidContract(contractWrapper.contract)) {
                 validated[id] = contractWrapper;
             } else {
                 invalidIds.push(id);
@@ -318,15 +313,11 @@ export default class VerificationController extends BaseController implements IC
         }
 
         pathBuffers.forEach(pb => {
-            session.inputFiles[this.generateId()] = pb;
+            session.inputFiles[generateId(pb.buffer)] = pb;
             newPathBuffers.push(pb);
         });
 
         return newPathBuffers;
-    }
-
-    private generateId(): string {
-        return `${Date.now()}-${Math.random.toString().slice(2)}`;
     }
 
     private getInputFilesEndpoint = async (req: Request, res: Response) => {
@@ -400,16 +391,16 @@ export default class VerificationController extends BaseController implements IC
 
     private resetSessionEndpoint = async (req: Request, res: Response) => {
         // TODO or simply delete req.session.nameOfProperty
-        req.session.destroy((err: any) => {
+        req.session.destroy((error: Error) => {
             let logMethod: keyof bunyan = null;
             let msg = "";
             let statusCode = null;
 
             const loggerOptions: any = { loc: "[VERIFICATION_CONTROLER:RESET]", id: req.sessionID };
-            if (err) {
+            if (error) {
                 logMethod = "error";
                 msg = "Error in session destruction";
-                loggerOptions.err = err;
+                loggerOptions.err = error.message;
                 statusCode = 500;
 
             } else {
@@ -428,12 +419,19 @@ export default class VerificationController extends BaseController implements IC
         res.send(session.unusedSources || []);
     }
 
+    private getSessionDataEndpoint = async (req: Request, res: Response) => {
+        return getSessionJSON(req.session as MySession);
+    }
+
     registerRoutes = (): Router => {
         this.router.route('/')
             .post([], this.safeHandler(this.legacyVerifyEndpoint));
         
         this.router.route('/checkByAddresses') // TODO should change name to conventional (kebab instead of camel case)
             .get([], this.safeHandler(this.checkByAddresses));
+        
+        this.router.route('/session-data')
+            .get(this.safeHandler(this.getSessionDataEndpoint));
         
         this.router.route('/files')
             .get(this.safeHandler(this.getInputFilesEndpoint))
