@@ -9,6 +9,7 @@ const Server = require("../dist/server/server").Server;
 const util = require("util");
 const fs = require("fs");
 const rimraf = require("rimraf");
+const path = require("path");
 chai.use(chaiHttp);
 
 // howto: https://www.digitalocean.com/community/tutorials/test-a-node-restful-api-with-mocha-and-chai
@@ -28,7 +29,10 @@ describe("Server", async () => {
         rimraf.sync(process.env.MOCK_REPOSITORY);
     });
 
-    const xdaiAddress = "0x656d0062eC89c940213E3F3170EA8b2add1c0143";
+    const sourcePath = path.join("test", "testcontracts", "1_Storage", "1_Storage.sol");
+    const metadataPath = path.join("test", "testcontracts", "1_Storage", "metadata.json");
+    const contractChain = "100"; // xdai
+    const contractAddress = "0x656d0062eC89c940213E3F3170EA8b2add1c0143";
 
     describe("/checkByAddress", () => {
         it("should fail for missing chainIds", (done) => {
@@ -65,7 +69,7 @@ describe("Server", async () => {
             const resultArray = res.body;
             chai.expect(resultArray).to.have.a.lengthOf(1);
             const result = resultArray[0];
-            chai.expect(result.address).to.equal(xdaiAddress);
+            chai.expect(result.address).to.equal(contractAddress);
             chai.expect(result.status).to.equal(expectedStatus);
             if (done) done();
         }
@@ -73,14 +77,14 @@ describe("Server", async () => {
         it("should return false for previously unverified contract", (done) => {
             chai.request(server.app)
                 .get("/checkByAddresses")
-                .query({ chainIds: 100, addresses: xdaiAddress })
+                .query({ chainIds: 100, addresses: contractAddress })
                 .end((err, res) => assertStatus(err, res, "false", done));
         });
 
         it("should fail for invalid address", (done) => {
             chai.request(server.app)
                 .get("/checkByAddresses")
-                .query({ chainIds: "100", addresses: "0x656d0062eC89c940213E3F3170EA8b2add1c0142" })
+                .query({ chainIds: contractChain, addresses: "0x656d0062eC89c940213E3F3170EA8b2add1c0142" })
                 .end((err, res) => {
                     chai.expect(err).to.be.null;
                     chai.expect(res.status).to.equal(400);
@@ -94,20 +98,20 @@ describe("Server", async () => {
         it("should return true for previously verified contract", (done) => {
             const agent = chai.request.agent(server.app);
             agent.get("/checkByAddresses")
-                .query({ chainIds: 100, addresses: xdaiAddress })
+                .query({ chainIds: 100, addresses: contractAddress })
                 .end((err, res) => {
                     assertStatus(err, res, "false");
                     agent.post("/")
-                        .field("address", xdaiAddress)
-                        .field("chain", "100")
-                        .attach("files", fs.readFileSync("/home/fabijan/shardlabs/test-contracts/test/metadata.json"), "metadata.json")
-                        .attach("files", fs.readFileSync("/home/fabijan/shardlabs/test-contracts/test/1_Storage.sol"))
+                        .field("address", contractAddress)
+                        .field("chain", contractChain)
+                        .attach("files", fs.readFileSync(metadataPath), "metadata.json")
+                        .attach("files", fs.readFileSync(sourcePath))
                         .end((err, res) => {
                             chai.expect(err).to.be.null;
                             chai.expect(res.status).to.equal(200);
 
                             agent.get("/checkByAddresses")
-                                .query({ chainIds: 100, addresses: xdaiAddress })
+                                .query({ chainIds: 100, addresses: contractAddress })
                                 .end((err, res) => assertStatus(err, res, "perfect", done));
                         });     
                 });
@@ -118,8 +122,8 @@ describe("Server", async () => {
         it("should correctly inform for an address check of a non verified contract", (done) => {
             chai.request(server.app)
                 .post("/")
-                .field("chain", "100")
-                .field("address", xdaiAddress)
+                .field("chain", contractChain)
+                .field("address", contractAddress)
                 .end((err, res) => {
                     chai.expect(err).to.be.null;
                     chai.expect(res.body).to.haveOwnProperty("error");
@@ -136,7 +140,7 @@ describe("Server", async () => {
             const resultArr = res.body.result;
             chai.expect(resultArr).to.have.a.lengthOf(1);
             const result = resultArr[0];
-            chai.expect(result.address).to.equal(xdaiAddress);
+            chai.expect(result.address).to.equal(contractAddress);
             chai.expect(result.status).to.equal("perfect");
             done();
         }
@@ -144,10 +148,10 @@ describe("Server", async () => {
         it("should verify multipart upload", (done) => {
             chai.request(server.app)
                 .post("/")
-                .field("address", xdaiAddress)
-                .field("chain", "100")
-                .attach("files", fs.readFileSync("/home/fabijan/shardlabs/test-contracts/test/metadata.json"), "metadata.json")
-                .attach("files", fs.readFileSync("/home/fabijan/shardlabs/test-contracts/test/1_Storage.sol"))
+                .field("address", contractAddress)
+                .field("chain", contractChain)
+                .attach("files", fs.readFileSync(metadataPath), "metadata.json")
+                .attach("files", fs.readFileSync(sourcePath))
                 .end((err, res) => assertions(err, res, done));
         });
 
@@ -155,11 +159,11 @@ describe("Server", async () => {
             chai.request(server.app)
                 .post("/")
                 .send({
-                    address: xdaiAddress,
-                    chain: "100",
+                    address: contractAddress,
+                    chain: contractChain,
                     files: {
-                        "metadata.json": fs.readFileSync("/home/fabijan/shardlabs/test-contracts/test/metadata.json").toString(),
-                        "1_Storage.sol": fs.readFileSync("/home/fabijan/shardlabs/test-contracts/test/1_Storage.sol").toString()
+                        "metadata.json": fs.readFileSync(metadataPath).toString(),
+                        "1_Storage.sol": fs.readFileSync(sourcePath).toString()
                     }
                 })
                 .end((err, res) => assertions(err, res, done));
@@ -168,9 +172,9 @@ describe("Server", async () => {
         it("should return Bad Request for missing file", (done) => {
             chai.request(server.app)
                 .post("/")
-                .field("address", xdaiAddress)
-                .field("chain", "100")
-                .attach("files", fs.readFileSync("/home/fabijan/shardlabs/test-contracts/test/metadata.json"), "metadata.json")
+                .field("address", contractAddress)
+                .field("chain", contractChain)
+                .attach("files", fs.readFileSync(metadataPath), "metadata.json")
                 .end((err, res) => {
                     chai.expect(err).to.be.null;
                     chai.expect(res.body).to.haveOwnProperty("error");
