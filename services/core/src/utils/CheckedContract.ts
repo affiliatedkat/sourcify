@@ -33,6 +33,9 @@ export class CheckedContract {
     /** The path of the contract during compile-time. */
     compiledPath: string;
 
+    /** The version of the Solidity compiler to use for compilation. */
+    compilerVersion: string;
+
     /** The name of the contract. */
     name: string;
 
@@ -40,7 +43,7 @@ export class CheckedContract {
      * @returns true if no sources are missing or are invalid (malformed); false otherwise
      */
     public isValid(): boolean {
-        return isEmpty(this.missing) && isEmpty(this.invalid);
+        return isEmpty(this.missing) && isEmpty(this.invalid) && Boolean(this.compilerVersion);
     }
 
     private sourceMapToStringMap(input: SourceMap) {
@@ -67,6 +70,9 @@ export class CheckedContract {
             delete metadataSource.license;
         }
 
+        if (metadata.compiler && metadata.compiler.version) {
+            this.compilerVersion = metadata.compiler.version;
+        }
         const { contractPath, contractName } = this.getPathAndName();
         this.compiledPath = contractPath;
         this.name = contractName;
@@ -113,14 +119,13 @@ export class CheckedContract {
      * of source files related to the provided metadata file.
      */
     private composeSuccessMessage(): string {
-        const compilerVersionDetailed = this.metadata.compiler.version;
-        const compilerVersion = compilerVersionDetailed.split("+")[0];
+        const simpleCompilerVersion = this.compilerVersion.split("+")[0];
         const msgLines: string[] = [];
         msgLines.push(`${this.name} (${this.compiledPath}):`);
         msgLines.push("  Success!");
-        msgLines.push(`  Compiled with Solidity ${compilerVersion}`);
-        msgLines.push(`  https://solc-bin.ethereum.org/wasm/soljson-v${compilerVersionDetailed}.js`);
-        msgLines.push(`  https://solc-bin.ethereum.org/linux-amd64/solc-linux-amd64-v${compilerVersionDetailed}`);
+        msgLines.push(`  Compiled with Solidity ${simpleCompilerVersion}`);
+        msgLines.push(`  https://solc-bin.ethereum.org/wasm/soljson-v${this.compilerVersion}.js`);
+        msgLines.push(`  https://solc-bin.ethereum.org/linux-amd64/solc-linux-amd64-v${this.compilerVersion}`);
         return msgLines.join("\n");
     }
 
@@ -173,6 +178,10 @@ export class CheckedContract {
         const foundSourcesNumber = Object.keys(this.solidity).length;
         if (foundSourcesNumber) {
             msgLines.push(`  ${foundSourcesNumber} other source files found successfully.`);
+        }
+
+        if (!this.compilerVersion) {
+            msgLines.push("  No compiler version provided.");
         }
 
         return msgLines.join("\n");

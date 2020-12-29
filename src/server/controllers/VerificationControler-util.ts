@@ -13,6 +13,7 @@ export type ContractLocation = {
 export type ContractWrapper =
     ContractLocation & {
     contract: CheckedContract,
+    compilerVersion: string,
     valid: boolean
 };
   
@@ -38,4 +39,13 @@ export type MySession =
 
 export interface MatchMap {
     [id: string]: Match;
+}
+
+
+export function getSessionJSON(session: MySession) {
+    return {
+        inputFiles: session.inputFiles,
+        contracts: session.pendingContracts,
+        unused: session.unusedSources
+    };
 }

@@ -9,7 +9,7 @@ import * as bunyan from 'bunyan';
 import config from '../../config';
 import fileUpload from 'express-fileupload';
 import { isValidAddress } from '../../common/validators/validators';
-import { ContractLocationMap, MySession, MatchMap, ContractWrapperMap, SessionMaps } from './verification-types';
+import { ContractLocationMap, MySession, MatchMap, ContractWrapperMap, SessionMaps, getSessionJSON } from './VerificationControler-util';
 
 export default class VerificationController extends BaseController implements IController {
     router: Router;
@@ -83,8 +83,12 @@ export default class VerificationController extends BaseController implements IC
             throw new BadRequestError(msg);
         }
 
+        const contract = validatedContracts[0];
+        if (!contract.compilerVersion) {
+            throw new BadRequestError("Metadata file not specifying a compiler version.");
+        }
         const inputData: InputData = {
-            contract: validatedContracts[0],
+            contract,
             addresses: [address],
             chain
         };
@@ -161,13 +165,14 @@ export default class VerificationController extends BaseController implements IC
                     address: undefined, // TODO should guess the address?
                     chain: undefined,
                     contract,
+                    compilerVersion: contract.compilerVersion,
                     valid: contract.isValid()
                 }
             }
 
             this.updateUnused(unused, session);
             
-            res.status(200).send({ contracts: session.pendingContracts, unused });
+            res.status(200).send(getSessionJSON(session));
         } catch(error) {
             throw new BadRequestError(error.message);
         }
@@ -244,12 +249,7 @@ export default class VerificationController extends BaseController implements IC
         const matches: MatchMap = {};
         for (const id in contractWrappers) {
             const { address, chain, contract } = contractWrappers[id];
-
-            const inputData: InputData = {
-                contract: contract,
-                addresses: [address],
-                chain
-            };
+            const inputData: InputData = { addresses: [address], chain, contract };
 
             const matchPromise = this.verificationService.inject(inputData, config.localchain.url); 
             const match: Match = await matchPromise.catch(err => {
@@ -335,13 +335,13 @@ export default class VerificationController extends BaseController implements IC
     }
 
     private addInputFilesEndpoint = async (req: Request, res: Response) => {
-        if (!req.body.files) {
-            return res.status(400).send({ error: 'No "files" provided' });
-        }
-
         const pathBuffers = this.extractFiles(req);
+        if (!pathBuffers) {
+            throw new BadRequestError("No files provided");
+        }
         const session = (req.session as MySession);
         this.saveFiles(pathBuffers, session);
+        this.validateEndpoint(req, res);
     }
 
     private updateUnused(unused: string[], session: MySession) {
