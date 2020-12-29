@@ -151,11 +151,11 @@ describe("Server", async () => {
                 .field("address", contractAddress)
                 .field("chain", contractChain)
                 .attach("files", fs.readFileSync(metadataPath), "metadata.json")
-                .attach("files", fs.readFileSync(sourcePath))
+                .attach("files", fs.readFileSync(sourcePath), "1_Storage.sol")
                 .end((err, res) => assertions(err, res, done));
         });
 
-        it("should verify json upload", (done) => {
+        it("should verify json upload with string properties", (done) => {
             chai.request(server.app)
                 .post("/")
                 .send({
@@ -164,6 +164,20 @@ describe("Server", async () => {
                     files: {
                         "metadata.json": fs.readFileSync(metadataPath).toString(),
                         "1_Storage.sol": fs.readFileSync(sourcePath).toString()
+                    }
+                })
+                .end((err, res) => assertions(err, res, done));
+        });
+
+        it("should verify json upload with Buffer properties", (done) => {
+            chai.request(server.app)
+                .post("/")
+                .send({
+                    address: contractAddress,
+                    chain: contractChain,
+                    files: {
+                        "metadata.json": fs.readFileSync(metadataPath),
+                        "1_Storage.sol": fs.readFileSync(sourcePath)
                     }
                 })
                 .end((err, res) => assertions(err, res, done));
@@ -184,6 +198,34 @@ describe("Server", async () => {
                     chai.expect(errorMessage).to.include("1_Storage.sol".toLowerCase());
                     done();
                 });
+        });
+    });
+
+    describe("verification v2", () => {
+        it("add, validate, try verifying without address and chain", (done) => {
+            const agent = chai.request.agent(server.app);
+            agent.post("/files")
+                .attach("files", fs.readFileSync(sourcePath), "1_Storage.sol")
+                .attach("files", fs.readFileSync(metadataPath), "metadata.json")
+                .then((res) => {
+                    const contracts = res.body.contracts;
+                    const ids = [];
+                    for (const id in contracts) {
+                        ids.push(id);
+                    }
+                    agent.post("/verify-validated")
+                        .send({ ids })
+                        .then(res => {
+                            const result = res.body.result;
+                            const resultKeys = Object.keys(result);
+                            chai.expect(resultKeys).to.have.a.lengthOf(1);
+                            const id = resultKeys[0];
+                            const feedback = result[id];
+                            // chai.expect(id).to.equal(); // TODO should id be address (old behavior) or contract id
+                            chai.expect(feedback.status).to.be.null;
+                            done();
+                        });
+            });
         });
     });
 });
