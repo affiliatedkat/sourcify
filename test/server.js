@@ -216,7 +216,7 @@ describe("Server", async () => {
                     for (const id in contracts) {
                         meta[id] = {};
                     }
-                    agent.post("/verify-validated")
+                    agent.post("/verify")
                         .send({ meta })
                         .then(res => {
                             chai.expect(res.status).to.equal(400);
@@ -242,7 +242,7 @@ describe("Server", async () => {
                         ids.push(id);
                     }
                     chai.request(server.app)
-                        .post("/verify-validated")
+                        .post("/verify")
                         .send({ ids })
                         .end((err, res) => {
                             chai.expect(err).to.be.null;

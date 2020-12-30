@@ -1,5 +1,5 @@
 import { Session } from 'express-session';
-import { Match, PathBuffer, CheckedContract, StringMap, isEmpty } from '@ethereum-sourcify/core';
+import { PathBuffer, CheckedContract, isEmpty  } from '@ethereum-sourcify/core';
 import Web3 from 'web3';
 
 export interface PathBufferMap {
@@ -10,23 +10,26 @@ export type ContractLocation = {
     chain: string,
     address: string
 }
-  
-export type ContractWrapper =
-    ContractLocation & {
-    contract: CheckedContract
-};
-  
-export interface ContractLocationMap {
-    [id: string]: ContractLocation;
+
+export type ContractMeta = {
+    compilerVersion?: string,
+    address?: string,
+    networkId?: string,
+    status?: Status,
+    statusMessage?: string
 }
 
+export type ContractWrapper =
+    ContractMeta & {
+    contract: CheckedContract
+}
 export interface ContractWrapperMap {
     [id: string]: ContractWrapper;
 }
 
 export type SessionMaps = {
     inputFiles: PathBufferMap;
-    pendingContracts: ContractWrapperMap;
+    contractWrappers: ContractWrapperMap;
 };
 
 export type MySession = 
@@ -36,44 +39,48 @@ export type MySession =
     started: boolean
 };
 
-export interface MatchMap {
-    [id: string]: Match;
-}
+export type Status = "perfect" | "partial" | "error";
 
-export type ContractMeta = {
-    compilerVersion: string,
-    chain: string,
-    address: string,
-}
-
-export interface ContractMetaMap {
-    [id: string]: ContractMeta;
+export type SendableContract =
+    ContractMeta & {
+    files: {
+        found: string[],
+        missing: string[]
+    },
+    verificationId?: string
 }
 
 export function isVerifiable(contractWrapper: ContractWrapper) {
     const contract = contractWrapper.contract;
     return isEmpty(contract.missing)
         && isEmpty(contract.invalid)
-        && Boolean(contract.compilerVersion)
+        && Boolean(contractWrapper.compilerVersion)
         && Boolean(contractWrapper.address)
-        && Boolean(contractWrapper.chain);
+        && Boolean(contractWrapper.networkId)
+        && (contractWrapper.status !== "partial" && contractWrapper.status !== "perfect"); // not already verified
 }
 
 export function getSessionJSON(session: MySession) {
-    const inputFiles: StringMap = {};
-    for (const id in (session.inputFiles || {})) {
-        inputFiles[id] = session.inputFiles[id].path;
-    }
-
-    const contracts: any = {};
-    for (const id in (session.pendingContracts || {})) {
-        contracts[id] = session.pendingContracts[id].contract.getSendableJSON();
+    const contractWrappers = session.contractWrappers || {};
+    const contracts: SendableContract[] = [];
+    for (const id in contractWrappers) {
+        const contractWrapper = contractWrappers[id];
+        const sendableContract: SendableContract = contractWrapper.contract.getSendableJSON();
+        sendableContract.verificationId = id;
+        contracts.push(sendableContract);
     }
 
     const unused = session.unusedSources || [];
-    return { inputFiles, contracts, unused };
+    return { contracts, unused };
 }
 
 export function generateId(obj: any): string {
     return Web3.utils.keccak256(JSON.stringify(obj));
+}
+
+export function updateUnused(unused: string[], session: MySession) {
+    if (!session.unusedSources) {
+        session.unusedSources = [];
+    }
+    session.unusedSources = unused;
 }

@@ -34,7 +34,7 @@ export class CheckedContract {
     compiledPath: string;
 
     /** The version of the Solidity compiler to use for compilation. */
-    compilerVersion: string;
+    compilerVersion?: string;
 
     /** The name of the contract. */
     name: string;
@@ -43,7 +43,7 @@ export class CheckedContract {
      * @returns true if no sources are missing or are invalid (malformed); false otherwise
      */
     public isValid(): boolean {
-        return isEmpty(this.missing) && isEmpty(this.invalid) && Boolean(this.compilerVersion);
+        return isEmpty(this.missing) && isEmpty(this.invalid);
     }
 
     private sourceMapToStringMap(input: SourceMap) {
@@ -115,15 +115,19 @@ export class CheckedContract {
     }
 
     public getSendableJSON() {
+        let compilerVersion = undefined;
+        if (this.metadata.compiler && this.metadata.compiler.version) {
+            compilerVersion = this.metadata.compiler.version;
+        }
         return {
             compiledPath: this.compiledPath,
             name: this.name,
-            foundSources: Object.keys(this.solidity).length,
-            missingSources: this.missing,
-            invalidSources: this.invalid,
-            compilerVersion: this.compilerVersion,
-            valid: this.isValid()
-        }
+            compilerVersion,
+            files: {
+                found: Object.keys(this.solidity),
+                missing: Object.keys(this.missing).concat(Object.keys(this.invalid))
+            }
+        };
     }
 
     /**

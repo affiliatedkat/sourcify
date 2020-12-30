@@ -2,14 +2,14 @@ import { Request, Response, Router } from 'express';
 import BaseController from './BaseController';
 import { IController } from '../../common/interfaces';
 import { IVerificationService } from '@ethereum-sourcify/verification';
-import { InputData, getChainId, Logger, PathBuffer, CheckedContract, isEmpty, Match } from '@ethereum-sourcify/core';
+import { InputData, getChainId, Logger, PathBuffer, CheckedContract, isEmpty } from '@ethereum-sourcify/core';
 import { BadRequestError, NotFoundError } from '../../common/errors'
 import { IValidationService } from '@ethereum-sourcify/validation';
 import * as bunyan from 'bunyan';
 import config from '../../config';
 import fileUpload from 'express-fileupload';
 import { isValidAddress } from '../../common/validators/validators';
-import { MySession, MatchMap, ContractWrapperMap, SessionMaps, getSessionJSON, generateId, isVerifiable, ContractMetaMap } from './VerificationController-util';
+import { MySession, getSessionJSON, generateId, isVerifiable, SendableContract, ContractWrapperMap, updateUnused } from './VerificationController-util';
 
 export default class VerificationController extends BaseController implements IController {
     router: Router;
@@ -140,13 +140,7 @@ export default class VerificationController extends BaseController implements IC
         res.send(resultArray)
     }
 
-    private validateEndpoint = async (req: Request, res: Response) => {
-        const session = (req.session as MySession);
-        if (!session.inputFiles || isEmpty(session.inputFiles)) {
-            // TODO log
-            throw new BadRequestError("No input files to use for validation.");
-        }
-
+    private validate = async (session: MySession) => {
         const pathBuffers: PathBuffer[] = [];
         for (const id in session.inputFiles) {
             pathBuffers.push(session.inputFiles[id]);
@@ -159,82 +153,62 @@ export default class VerificationController extends BaseController implements IC
             const newPendingContracts: ContractWrapperMap = {};
             for (const contract of contracts) {
                 newPendingContracts[generateId(contract.metadata)] = {
-                    address: undefined, // TODO should guess the address?
-                    chain: undefined,
+                    compilerVersion: contract.compilerVersion,
                     contract
                 }
             }
-            session.pendingContracts = newPendingContracts;
-            this.updateUnused(unused, session);
-            
-            res.status(200).send(getSessionJSON(session));
+            session.contractWrappers = newPendingContracts;
+            updateUnused(unused, session);
+
         } catch(error) {
-            throw new BadRequestError(error.message);
+            const paths = pathBuffers.map(pb => pb.path);
+            updateUnused(paths, session);
         }
     }
 
     private verifyValidatedEndpoint = async (req: Request, res: Response) => {
         const session = (req.session as MySession);
-        if (!session.pendingContracts || isEmpty(session.pendingContracts)) {
-            // TODO log
-            throw new BadRequestError("There are currently no pending contracts. Make them pending by validating.");
+        if (!session.contractWrappers || isEmpty(session.contractWrappers)) {
+            throw new BadRequestError("There are currently no pending contracts.");
         }
 
-        const meta: ContractMetaMap = req.body.meta;
-        if (!meta || isEmpty(meta)) {
-            // TODO log
-            throw new BadRequestError("No meta specified");
+        const receivedContracts: SendableContract[] = req.body.contracts; // TODO decide about the name of the body property
+        if (!receivedContracts || !receivedContracts.length) {
+            throw new BadRequestError("No contracts specified");
         }
 
-        const invalidIds: string[] = [];
         const verifiable: ContractWrapperMap = {};
-        for (const id in meta) {
-            const contractWrapper = session.pendingContracts[id];
-            if (!contractWrapper) {
-                invalidIds.push(id);
-            } else {
-                contractWrapper.address = meta[id].address;
-                contractWrapper.chain = meta[id].chain;
-                contractWrapper.contract.compilerVersion = meta[id].compilerVersion;
+        for (const receivedContract of receivedContracts) {
+            const id = receivedContract.verificationId;
+            const contractWrapper = session.contractWrappers[id];
+            if (contractWrapper) {
+                contractWrapper.address = receivedContract.address;
+                contractWrapper.networkId = receivedContract.networkId;
+                contractWrapper.compilerVersion = receivedContract.compilerVersion;
                 if (isVerifiable(contractWrapper)) {
                     verifiable[id] = contractWrapper;
                 }
             }
         }
 
-        if (isEmpty(verifiable)) {
-            const msg = "No verifiable contracts";
-            throw new BadRequestError(msg);
-        }
-        
-        if (invalidIds.length) {
-            const msg = "Some contract ids were not found";
-            // TODO log
-            return res.status(404).send({ error: msg, ids: invalidIds });
-        }
-
-        const result = await this.verifyValidated(verifiable);
-        res.status(200).send({ result });
+        await this.verifyValidated(verifiable);
+        res.send(getSessionJSON(session));
     }
 
-    private async verifyValidated(contractWrappers: ContractWrapperMap): Promise<MatchMap> {
-        const matches: MatchMap = {};
+    private async verifyValidated(contractWrappers: ContractWrapperMap): Promise<void> {
         for (const id in contractWrappers) {
-            const { address, chain, contract } = contractWrappers[id];
-            const inputData: InputData = { addresses: [address], chain, contract };
+            const contractWrapper = contractWrappers[id];
+            const inputData: InputData = { addresses: [contractWrapper.address], chain: contractWrapper.networkId, contract: contractWrapper.contract };
 
+            // TODO check if address is already verified? be careful not to permanently set the status
             const matchPromise = this.verificationService.inject(inputData, config.localchain.url); 
-            const match: Match = await matchPromise.catch(err => {
-                return {
-                    status: null,
-                    address,
-                    message: err.message
-                };
+            matchPromise.then(match => {
+                contractWrapper.status = match.status;
+            }).catch(err => {
+                contractWrapper.status = "error";
+                contractWrapper.statusMessage = err.message;
             });
-            matches[id] = match;
         }
-
-        return matches;
     }
 
     private extractFiles(req: Request): PathBuffer[] {
@@ -269,16 +243,14 @@ export default class VerificationController extends BaseController implements IC
         return pathBuffers;
     }
 
-    private saveFiles(pathBuffers: PathBuffer[], session: MySession): PathBuffer[] {
+    private saveFiles(pathBuffers: PathBuffer[], session: MySession) {
         if (!session.inputFiles) {
             session.inputFiles = {};
         }
         
         let inputSize = 0; // shall contain old buffer size + new files size
-        const newPathBuffers: PathBuffer[] = [];
         for (const id in session.inputFiles) {
             const pb = session.inputFiles[id];
-            newPathBuffers.push(pb);
             inputSize += pb.buffer.length;
         }
 
@@ -291,15 +263,7 @@ export default class VerificationController extends BaseController implements IC
 
         pathBuffers.forEach(pb => {
             session.inputFiles[generateId(pb.buffer)] = pb;
-            newPathBuffers.push(pb);
         });
-
-        return newPathBuffers;
-    }
-
-    private getInputFilesEndpoint = async (req: Request, res: Response) => {
-        const inputFiles = (req.session as MySession).inputFiles || {};
-        res.send(inputFiles);
     }
 
     private addInputFilesEndpoint = async (req: Request, res: Response) => {
@@ -309,54 +273,13 @@ export default class VerificationController extends BaseController implements IC
         }
         const session = (req.session as MySession);
         this.saveFiles(pathBuffers, session);
-        this.validateEndpoint(req, res);
-    }
-
-    private updateUnused(unused: string[], session: MySession) {
-        if (!session.unusedSources) {
-            session.unusedSources = [];
+        this.validate(session);
+        const toVerify: ContractWrapperMap = {};
+        for (const id of (req.body.ids || [])) {
+            toVerify[id] = session.contractWrappers[id];
         }
-        session.unusedSources = unused;
-    }
-
-    private deleteEndpoint = async (req: Request, res: Response, property: keyof SessionMaps) => {
-        const ids: string[] = req.body.ids;
-        if (!ids || !ids.length) {
-            return res.status(400).send({ error: "No ids specified" });
-        }
-        
-        const objects = (req.session as MySession)[property] || {};
-
-        const notFound = [];
-        for (const id of ids) {
-            const deleted = delete objects[id];
-            if (!deleted) {
-                notFound.push(id);
-            }
-        }
-
-        if (notFound.length) {
-            return res.status(400).send({
-                error: "Some ids could not be deleted",
-                notFound,
-                remaining: Object.keys(objects)
-            });
-        }
-
-        res.status(200).send({ remaining: Object.keys(objects) });
-    }
-
-    private deleteInputFilesEndpoint = async (req: Request, res: Response) => {
-        this.deleteEndpoint(req, res, "inputFiles");
-    }
-
-    private getPendingContractsEndpoint = async (req: Request, res: Response) => {
-        const pendingContracts = (req.session as MySession).pendingContracts || {};
-        res.send(pendingContracts || {});
-    }
-
-    private deletePendingContractsEndpoint = async (req: Request, res: Response) => {
-        this.deleteEndpoint(req, res, "pendingContracts");
+        await this.verifyValidated(toVerify);
+        res.send(getSessionJSON(session));
     }
 
     private startSessionEndpoint = async (req: Request, res: Response) => {
@@ -366,14 +289,14 @@ export default class VerificationController extends BaseController implements IC
         res.status(200).send(msg);
     }
 
-    private resetSessionEndpoint = async (req: Request, res: Response) => {
+    private restartSessionEndpoint = async (req: Request, res: Response) => {
         // TODO or simply delete req.session.nameOfProperty
         req.session.destroy((error: Error) => {
             let logMethod: keyof bunyan = null;
             let msg = "";
             let statusCode = null;
 
-            const loggerOptions: any = { loc: "[VERIFICATION_CONTROLER:RESET]", id: req.sessionID };
+            const loggerOptions: any = { loc: "[VERIFICATION_CONTROLER:RESTART]", id: req.sessionID };
             if (error) {
                 logMethod = "error";
                 msg = "Error in session destruction";
@@ -391,13 +314,8 @@ export default class VerificationController extends BaseController implements IC
         });
     }
 
-    private getUnusedSourcesEndpoint = async (req: Request, res: Response) => {
-        const session = (req.session as MySession);
-        res.send(session.unusedSources || []);
-    }
-
     private getSessionDataEndpoint = async (req: Request, res: Response) => {
-        return getSessionJSON(req.session as MySession);
+        res.send(getSessionJSON(req.session as MySession));
     }
 
     registerRoutes = (): Router => {
@@ -411,27 +329,15 @@ export default class VerificationController extends BaseController implements IC
             .get(this.safeHandler(this.getSessionDataEndpoint));
         
         this.router.route('/files')
-            .get(this.safeHandler(this.getInputFilesEndpoint))
-            .post(this.safeHandler(this.addInputFilesEndpoint))
-            .delete(this.safeHandler(this.deleteInputFilesEndpoint));
+            .post(this.safeHandler(this.addInputFilesEndpoint));
         
-        this.router.route('/unused')
-            .get(this.safeHandler(this.getUnusedSourcesEndpoint));
-        
-        this.router.route('/contracts')
-            .get(this.safeHandler(this.getPendingContractsEndpoint))
-            .delete(this.safeHandler(this.deletePendingContractsEndpoint));
-        
-        this.router.route('/reset-session')
-            .post(this.safeHandler(this.resetSessionEndpoint));
+        this.router.route('/restart-session')
+            .post(this.safeHandler(this.restartSessionEndpoint));
         
         this.router.route('/start-session') // TODO perhaps remove this if it's only going to be used from browser
             .post(this.safeHandler(this.startSessionEndpoint));
-        
-        this.router.route('/validate')
-            .post(this.safeHandler(this.validateEndpoint));
 
-        this.router.route('/verify-validated') // TODO rename to /verify
+        this.router.route('/verify')
             .post(this.safeHandler(this.verifyValidatedEndpoint));
 
         return this.router;
