@@ -9,7 +9,7 @@ import * as bunyan from 'bunyan';
 import config from '../../config';
 import fileUpload from 'express-fileupload';
 import { isValidAddress } from '../../common/validators/validators';
-import { ContractLocationMap, MySession, MatchMap, ContractWrapperMap, SessionMaps, getSessionJSON, generateId, isValidContract } from './VerificationControler-util';
+import { MySession, MatchMap, ContractWrapperMap, SessionMaps, getSessionJSON, generateId, isVerifiable, ContractMetaMap } from './VerificationController-util';
 
 export default class VerificationController extends BaseController implements IController {
     router: Router;
@@ -17,7 +17,7 @@ export default class VerificationController extends BaseController implements IC
     validationService: IValidationService;
     logger: bunyan;
 
-    private static readonly MAX_INPUT_SIZE = 2 * 1024 * 1024; // 2 MB
+    static readonly MAX_INPUT_SIZE = 2 * 1024 * 1024; // 2 MB
 
     constructor(verificationService: IVerificationService, validationService: IValidationService) {
         super();
@@ -180,63 +180,40 @@ export default class VerificationController extends BaseController implements IC
             throw new BadRequestError("There are currently no pending contracts. Make them pending by validating.");
         }
 
-        const ids = req.body.ids;
-        if (!ids || !ids.length) {
+        const meta: ContractMetaMap = req.body.meta;
+        if (!meta || isEmpty(meta)) {
             // TODO log
-            throw new BadRequestError("No ids specified");
+            throw new BadRequestError("No meta specified");
         }
 
-        const notFoundIds: string[] = [];
-        for (const id of ids) {
-            if (!session.pendingContracts[id]) {
-                notFoundIds.push(id);
+        const invalidIds: string[] = [];
+        const verifiable: ContractWrapperMap = {};
+        for (const id in meta) {
+            const contractWrapper = session.pendingContracts[id];
+            if (!contractWrapper) {
+                invalidIds.push(id);
+            } else {
+                contractWrapper.address = meta[id].address;
+                contractWrapper.chain = meta[id].chain;
+                contractWrapper.contract.compilerVersion = meta[id].compilerVersion;
+                if (isVerifiable(contractWrapper)) {
+                    verifiable[id] = contractWrapper;
+                }
             }
+        }
+
+        if (isEmpty(verifiable)) {
+            const msg = "No verifiable contracts";
+            throw new BadRequestError(msg);
         }
         
-        if (notFoundIds.length) {
+        if (invalidIds.length) {
             const msg = "Some contract ids were not found";
             // TODO log
-            return res.status(404).send({ error: msg, ids: notFoundIds })
+            return res.status(404).send({ error: msg, ids: invalidIds });
         }
 
-        // don't care if values within are undefined, future version should be able to guess the address
-        const locations: ContractLocationMap = req.body.locations || {};
-        const invalidLocations: string[] = [];
-        for (const id in locations) {
-            const contract = session.pendingContracts[id];
-            if (contract) {
-                contract.address = locations[id].address;
-                contract.chain = locations[id].chain;
-            } else {
-                invalidLocations.push(id);
-            }
-        }
-
-        if (invalidLocations.length) {
-            // TODO log
-            const msg = "Invalid ids used as keys in the locations property";
-            return res.status(404).send({ error: msg, ids: invalidLocations })
-        }
-
-        const validated: ContractWrapperMap = {};
-        const invalidIds: string[] = [];
-        for (const id in session.pendingContracts) {
-            const contractWrapper = session.pendingContracts[id];
-            if ((id in session.pendingContracts) && isValidContract(contractWrapper.contract)) {
-                validated[id] = contractWrapper;
-            } else {
-                invalidIds.push(id);
-            }
-        }
-
-        if (invalidIds.length) {
-            return res.status(400).send({
-                msg: "Some ids do not belong to valid contracts",
-                invalid: invalidIds
-            });
-        }
-
-        const result = await this.verifyValidated(validated);
+        const result = await this.verifyValidated(verifiable);
         res.status(200).send({ result });
     }
 

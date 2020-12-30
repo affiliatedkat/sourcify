@@ -10,6 +10,7 @@ const util = require("util");
 const fs = require("fs");
 const rimraf = require("rimraf");
 const path = require("path");
+const MAX_INPUT_SIZE = require("../dist/server/controllers/VerificationController").default.MAX_INPUT_SIZE;
 chai.use(chaiHttp);
 
 // howto: https://www.digitalocean.com/community/tutorials/test-a-node-restful-api-with-mocha-and-chai
@@ -33,6 +34,7 @@ describe("Server", async () => {
     const metadataPath = path.join("test", "testcontracts", "1_Storage", "metadata.json");
     const contractChain = "100"; // xdai
     const contractAddress = "0x656d0062eC89c940213E3F3170EA8b2add1c0143";
+    const fakeAddress = "0x656d0062eC89c940213E3F3170EA8b2add1c0142"
 
     describe("/checkByAddress", () => {
         it("should fail for missing chainIds", (done) => {
@@ -84,7 +86,7 @@ describe("Server", async () => {
         it("should fail for invalid address", (done) => {
             chai.request(server.app)
                 .get("/checkByAddresses")
-                .query({ chainIds: contractChain, addresses: "0x656d0062eC89c940213E3F3170EA8b2add1c0142" })
+                .query({ chainIds: contractChain, addresses: fakeAddress })
                 .end((err, res) => {
                     chai.expect(err).to.be.null;
                     chai.expect(res.status).to.equal(400);
@@ -96,12 +98,12 @@ describe("Server", async () => {
         });
 
         it("should return true for previously verified contract", (done) => {
-            const agent = chai.request.agent(server.app);
-            agent.get("/checkByAddresses")
+            chai.request(server.app)
+                .get("/checkByAddresses")
                 .query({ chainIds: 100, addresses: contractAddress })
                 .end((err, res) => {
                     assertStatus(err, res, "false");
-                    agent.post("/")
+                    chai.request(server.app).post("/")
                         .field("address", contractAddress)
                         .field("chain", contractChain)
                         .attach("files", fs.readFileSync(metadataPath), "metadata.json")
@@ -110,7 +112,8 @@ describe("Server", async () => {
                             chai.expect(err).to.be.null;
                             chai.expect(res.status).to.equal(200);
 
-                            agent.get("/checkByAddresses")
+                            chai.request(server.app)
+                                .get("/checkByAddresses")
                                 .query({ chainIds: 100, addresses: contractAddress })
                                 .end((err, res) => assertStatus(err, res, "perfect", done));
                         });     
@@ -202,318 +205,70 @@ describe("Server", async () => {
     });
 
     describe("verification v2", () => {
-        it("add, validate, try verifying without address and chain", (done) => {
+        it("should fail on (add, validate, try verifying without meta)", (done) => {
             const agent = chai.request.agent(server.app);
             agent.post("/files")
                 .attach("files", fs.readFileSync(sourcePath), "1_Storage.sol")
                 .attach("files", fs.readFileSync(metadataPath), "metadata.json")
                 .then((res) => {
                     const contracts = res.body.contracts;
+                    const meta = {};
+                    for (const id in contracts) {
+                        meta[id] = {};
+                    }
+                    agent.post("/verify-validated")
+                        .send({ meta })
+                        .then(res => {
+                            chai.expect(res.status).to.equal(400);
+                            chai.expect(res.body.error);
+                            done();
+                        });
+            }).catch(err => {
+                chai.expect(false, `An error has occurred: ${err}`);
+            });
+        });
+
+        it("should fail if session cookie not stored clientside", (done) => {
+            chai.request(server.app)
+                .post("/files")
+                .attach("files", fs.readFileSync(sourcePath), "1_Storage.sol")
+                .attach("files", fs.readFileSync(metadataPath), "metadata.json")
+                .end((err, res) => {
+                    chai.expect(err).to.be.null;
+                    chai.expect(res.status).to.equal(200);
+                    const contracts = res.body.contracts;
                     const ids = [];
                     for (const id in contracts) {
                         ids.push(id);
                     }
-                    agent.post("/verify-validated")
+                    chai.request(server.app)
+                        .post("/verify-validated")
                         .send({ ids })
-                        .then(res => {
-                            const result = res.body.result;
-                            const resultKeys = Object.keys(result);
-                            chai.expect(resultKeys).to.have.a.lengthOf(1);
-                            const id = resultKeys[0];
-                            const feedback = result[id];
-                            // chai.expect(id).to.equal(); // TODO should id be address (old behavior) or contract id
-                            chai.expect(feedback.status).to.be.null;
+                        .end((err, res) => {
+                            chai.expect(err).to.be.null;
+                            chai.expect(res.status).to.equal(400);
+                            chai.expect(res.body.error);
                             done();
                         });
-            });
+                });
+        });
+
+        it("should fail if too many files uploaded", (done) => {
+            let request = chai.request(server.app)
+                .post("/files")
+            
+            const sourceBuffer = fs.readFileSync(sourcePath);
+            const times = MAX_INPUT_SIZE / sourceBuffer.length + 1;
+            for (let i = 0; i < times; ++i) {
+                request = request.attach("files", sourceBuffer);
+            }
+            
+            request.end((err, res) => {
+                chai.expect(err).to.be.null;
+                chai.expect(res.status).to.equal(400);
+                chai.expect(res.body.error);
+                done();
+            }); 
         });
     });
 });
-
-// process.env.TESTING = true;
-// process.env.LOCALCHAIN_URL = "http://localhost:8545";
-// process.env.MOCK_REPOSITORY = './mockRepository';
-// process.env.MOCK_DATABASE = './mockDatabase';
-
-// const assert = require('assert');
-// const chai = require('chai');
-// const chaiHttp = require('chai-http');
-// const ganache = require('ganache-cli');
-// const exec = require('child_process').execSync;
-// const pify = require('pify');
-// const Web3 = require('web3');
-// const read = require('fs').readFileSync;
-// const util = require('util');
-// const path = require('path');
-
-// const app = require('../src/server/server').default;
-// const { deployFromArtifact } = require('./helpers/helpers');
-
-// const Simple = require('./sources/pass/simple.js');
-// const { FileService } = require('sourcify-core');
-// const simpleMetadataPath = './test/sources/all/simple.meta.json';
-// const simpleSourcePath = './test/sources/all/Simple.sol';
-// const simpleMetadataJSONPath = './test/sources/metadata/simple.meta.object.json';
-// const importSourcePath = './test/sources/all/Import.sol';
-// const simpleWithImportSourcePath = './test/sources/all/SimpleWithImport.sol';
-// const simpleWithImportMetadataPath = './test/sources/all/simpleWithImport.meta.json';
-
-// chai.use(chaiHttp);
-
-// describe("server", function () {
-//   this.timeout(50000);
-
-//   let server;
-//   let web3;
-//   let simpleInstance;
-//   let serverAddress = 'http://localhost:5000';
-//   let fileservice = new FileService();
-//   let chainId = fileservice.getChainId('localhost');
-
-//   before(async function () {
-//     server = ganache.server({ chainId: chainId });
-//     await pify(server.listen)(8545);
-//     web3 = new Web3(process.env.LOCALCHAIN_URL);
-//     simpleInstance = await deployFromArtifact(web3, Simple);
-//   });
-
-//   // Clean up repository
-//   afterEach(function () {
-//     try { exec(`rm -rf ${process.env.MOCK_REPOSITORY}`) } catch (err) { /*ignore*/ }
-//   })
-
-//   // Clean up server
-//   after(async function () {
-//     await pify(server.close)();
-//   });
-
-//   it("when submitting a valid request (stringified metadata)", function (done) {
-//     const expectedPath = path.join(
-//       process.env.MOCK_REPOSITORY,
-//       'contracts',
-//       'full_match',
-//       chainId.toString(),
-//       simpleInstance.options.address,
-//       'metadata.json'
-//     );
-
-//     const submittedMetadata = read(simpleMetadataPath, 'utf-8');
-
-//     chai.request(serverAddress)
-//       .post('/')
-//       .attach("files", read(simpleMetadataPath), "simple.meta.json")
-//       .attach("files", read(simpleSourcePath), "Simple.sol")
-//       .field("address", simpleInstance.options.address)
-//       .field("chain", 'localhost')
-//       .end(function (err, res) {
-//         assert.equal(err, null);
-//         assert.equal(res.status, 200);
-
-//         // Reponse should be array of matches
-//         const text = JSON.parse(res.text);
-//         assert.equal(text.result[0].status, 'perfect');
-//         assert.equal(text.result[0].address, simpleInstance.options.address);
-
-//         // Verify sources were written to repo
-//         const saved = JSON.stringify(read(expectedPath, 'utf-8'));
-//         assert.equal(saved, submittedMetadata.trim());
-//         done();
-//       });
-//   });
-
-//   it("when submitting a valid request (json formatted metadata)", function (done) {
-//     const expectedPath = path.join(
-//       process.env.MOCK_REPOSITORY,
-//       'contracts',
-//       'full_match',
-//       chainId.toString(),
-//       simpleInstance.options.address,
-//       'metadata.json'
-//     );
-
-//     // The injector will save a stringified version
-//     const stringifiedMetadata = read(simpleMetadataPath, 'utf-8');
-
-//     chai.request(serverAddress)
-//       .post('/')
-//       .attach("files", read(simpleMetadataJSONPath), "simple.meta.object.json")
-//       .attach("files", read(simpleSourcePath), "Simple.sol")
-//       .field("address", simpleInstance.options.address)
-//       .field("chain", 'localhost')
-//       .end(function (err, res) {
-//         assert.equal(err, null);
-//         assert.equal(res.status, 200);
-
-//         // Verify sources were written to repo
-//         const saved = JSON.stringify(read(expectedPath, 'utf-8'));
-//         assert.equal(saved, stringifiedMetadata.trim());
-//         done();
-//       });
-//   });
-
-//   it("when submitting and bytecode does not match (error)", function (done) {
-//     chai.request(serverAddress)
-//       .post('/')
-//       .attach("files", read(simpleWithImportMetadataPath), "simpleWithImport.meta.json")
-//       .attach("files", read(simpleWithImportSourcePath), "SimpleWithImport.sol")
-//       .attach("files", read(importSourcePath), "Import.sol")
-//       .field("address", simpleInstance.options.address)
-//       .field("chain", 'localhost')
-//       .end(function (err, res) {
-//         assert.equal(err, null);
-//         assert.equal(res.status, 404);
-//         const result = JSON.parse(res.text);
-//         assert(result.error.includes("Could not match on-chain deployed bytecode"));
-//         done();
-//       });
-//   });
-
-//   it("when submitting a single metadata file (error)", function (done) {
-//     chai.request(serverAddress)
-//       .post('/')
-//       .attach("files", read(simpleMetadataPath), "simple.meta.json")
-//       .field("address", simpleInstance.options.address)
-//       .field("chain", 'localhost')
-//       .end(function (err, res) {
-//         assert.equal(err, null);
-//         assert.equal(res.status, 500);
-//         assert(res.error.text.includes('metadata file mentions a source file'));
-//         assert(res.error.text.includes('cannot be found in your upload'));
-//         done();
-//       });
-//   });
-
-//   it("when submitting a single source file (error)", function (done) {
-//     chai.request(serverAddress)
-//       .post('/')
-//       .attach("files", read(simpleSourcePath), "Simple.sol")
-//       .field("address", simpleInstance.options.address)
-//       .field("chain", 'localhost')
-//       .end(function (err, res) {
-//         assert.equal(err, null);
-//         assert.equal(res.status, 500);
-//         assert(res.error.text.includes('Metadata file not found'));
-//         done();
-//       });
-//   });
-
-//   it("when submitting without an address (error)", function (done) {
-//     chai.request(serverAddress)
-//       .post('/')
-//       .attach("files", read(simpleMetadataPath), "simple.meta.json")
-//       .attach("files", read(simpleSourcePath), "Simple.sol")
-//       .field("chain", 'localhost')
-//       .end(function (err, res) {
-//         assert.equal(err, null);
-//         assert.equal(res.status, 500);
-//         assert(res.error.text.includes('Missing address'));
-//         done();
-//       });
-//   });
-
-//   it("when submitting without a chain name (error)", function (done) {
-//     chai.request(serverAddress)
-//       .post('/')
-//       .attach("files", read(simpleMetadataPath), "simple.meta.json")
-//       .attach("files", read(simpleSourcePath), "Simple.sol")
-//       .field("address", simpleInstance.options.address)
-//       .end(function (err, res) {
-//         assert.equal(err, null);
-//         assert.equal(res.status, 404);
-//         assert(res.error.text.includes('Chain undefined not supported'));
-//         done();
-//       });
-//   });
-
-//   it("get /health", function (done) {
-//     chai.request(serverAddress)
-//       .get('/health')
-//       .end(function (err, res) {
-//         assert.equal(err, null);
-//         assert.equal(res.status, 200);
-//         assert(res.text.includes('Alive and kicking!'))
-//         done();
-//       });
-//   });
-
-//   describe("when submitting only an address / chain pair", function () {
-
-//     // Setup: write "Simple.sol" to repo
-//     beforeEach(function (done) {
-//       chai.request(serverAddress)
-//         .post('/')
-//         .attach("files", read(simpleMetadataPath), "simple.meta.json")
-//         .attach("files", read(simpleSourcePath), "Simple.sol")
-//         .field("address", simpleInstance.options.address)
-//         .field("chain", 'localhost')
-//         .end(function (err, res) {
-//           assert.equal(res.status, 200);
-//           done();
-//         });
-//     });
-
-//     afterEach(function () {
-//       try { exec(`rm -rf ${process.env.MOCK_REPOSITORY}`) } catch (err) { /*ignore*/ }
-//     });
-
-//     it("when address / chain exist (success)", function (done) {
-//       chai.request(serverAddress)
-//         .post('/')
-//         .field("address", simpleInstance.options.address)
-//         .field("chain", 'localhost')
-//         .end(function (err, res) {
-//           assert.equal(err, null);
-//           assert.equal(res.status, 200);
-
-//           const text = JSON.parse(res.text);
-//           assert.equal(text.result[0].status, 'perfect');
-//           assert.equal(text.result[0].address, simpleInstance.options.address);
-
-//           done();
-//         });
-//     });
-
-//     it("when chain does not exist (error)", function (done) {
-//       chai.request(serverAddress)
-//         .post('/')
-//         .field("address", simpleInstance.options.address)
-//         .field("chain", 'bitcoin_diamond_lottery')
-//         .end(function (err, res) {
-//           assert.equal(err, null);
-//           assert.equal(res.status, 404);
-
-//           const result = JSON.parse(res.text);
-//           assert.equal(result.error, "Chain bitcoin_diamond_lottery not supported!");
-//           done();
-//         });
-//     });
-
-//     it("when address does not exist (error)", function (done) {
-//       chai.request(serverAddress)
-//         .post('/')
-//         .field("address", "0xabcde")
-//         .field("chain", 'localhost')
-//         .end(function (err, res) {
-//           assert.equal(err, null);
-//           assert.equal(res.status, 404);
-
-//           const result = JSON.parse(res.text);
-//           assert.equal(result.error, "Address for specified chain not found in repository");
-//           done();
-//         });
-//     });
-
-//     it("when light endpoint is used", function (done) {
-//       chai.request(serverAddress)
-//         .get('/checkByAddresses')
-//         .query({addresses: simpleInstance.options.address + ",0x0000A906D248Cc99FB8CB296C8Ad8C6Df05431c9", chainIds: "1337"})
-//         .end(function (err, res) {
-//           assert.equal(err, null);
-//           const result = JSON.parse(res.text);
-//           assert.equal(result[0].status, "perfect");
-//           assert.equal(result[1].status, "false");
-//           done();
-//         })
-//     })
-//   });
-// });

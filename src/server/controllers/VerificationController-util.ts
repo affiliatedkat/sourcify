@@ -40,8 +40,23 @@ export interface MatchMap {
     [id: string]: Match;
 }
 
-export function isValidContract(contract: CheckedContract) {
-    return isEmpty(contract.missing) && isEmpty(contract.invalid) && Boolean(contract.compilerVersion);
+export type ContractMeta = {
+    compilerVersion: string,
+    chain: string,
+    address: string,
+}
+
+export interface ContractMetaMap {
+    [id: string]: ContractMeta;
+}
+
+export function isVerifiable(contractWrapper: ContractWrapper) {
+    const contract = contractWrapper.contract;
+    return isEmpty(contract.missing)
+        && isEmpty(contract.invalid)
+        && Boolean(contract.compilerVersion)
+        && Boolean(contractWrapper.address)
+        && Boolean(contractWrapper.chain);
 }
 
 export function getSessionJSON(session: MySession) {
@@ -61,5 +76,4 @@ export function getSessionJSON(session: MySession) {
 
 export function generateId(obj: any): string {
     return Web3.utils.keccak256(JSON.stringify(obj));
-    // return `${Date.now()}-${Math.random.toString().slice(2)}`;
 }
