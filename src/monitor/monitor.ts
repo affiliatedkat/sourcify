@@ -20,7 +20,8 @@ import {
   cborDecode,
   Logger,
   getSupportedChains,
-  PathBuffer
+  PathBuffer,
+  CheckedContract
 } from '@ethereum-sourcify/core';
 import { ValidationService } from '@ethereum-sourcify/validation';
 
@@ -645,7 +646,7 @@ export default class Monitor {
       try {
         const validatedContracts = this.validationService.checkFiles(inputFiles);
         const errors = validatedContracts
-                        .filter(contract => !contract.isValid())
+                        .filter(contract => !CheckedContract.isValid(contract))
                         .map(contract => contract.getInfo());
         if (errors.length) {
           throw new Error(errors.join("\n"));

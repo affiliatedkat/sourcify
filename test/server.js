@@ -118,7 +118,7 @@ describe("Server", async () => {
                                 .end((err, res) => assertStatus(err, res, "perfect", done));
                         });     
                 });
-        });
+        }).timeout(3000);
     });
 
     describe("/", () => {
@@ -205,70 +205,140 @@ describe("Server", async () => {
     });
 
     describe("verification v2", () => {
-        it("should fail on (add, validate, try verifying without meta)", (done) => {
+        it("should not verify after addition of metadata+source, but should after providing address+networkId", (done) => {
             const agent = chai.request.agent(server.app);
             agent.post("/files")
                 .attach("files", fs.readFileSync(sourcePath), "1_Storage.sol")
                 .attach("files", fs.readFileSync(metadataPath), "metadata.json")
-                .then((res) => {
-                    const contracts = res.body.contracts;
-                    const meta = {};
-                    for (const id in contracts) {
-                        meta[id] = {};
-                    }
-                    agent.post("/verify")
-                        .send({ meta })
-                        .then(res => {
-                            chai.expect(res.status).to.equal(400);
-                            chai.expect(res.body.error);
-                            done();
-                        });
-            }).catch(err => {
-                chai.expect(false, `An error has occurred: ${err}`);
-            });
-        });
-
-        it("should fail if session cookie not stored clientside", (done) => {
-            chai.request(server.app)
-                .post("/files")
-                .attach("files", fs.readFileSync(sourcePath), "1_Storage.sol")
-                .attach("files", fs.readFileSync(metadataPath), "metadata.json")
-                .end((err, res) => {
-                    chai.expect(err).to.be.null;
+                .then(res => {
                     chai.expect(res.status).to.equal(200);
                     const contracts = res.body.contracts;
-                    const ids = [];
-                    for (const id in contracts) {
-                        ids.push(id);
-                    }
-                    chai.request(server.app)
-                        .post("/verify")
-                        .send({ ids })
+                    chai.expect(contracts).to.have.a.lengthOf(1);
+                    const contract = contracts[0];
+                    chai.expect(contract.status).to.equal("error");
+                    chai.expect(res.body.unused).to.be.empty;
+                    contract.address = contractAddress;
+                    contract.networkId = contractChain;
+
+                    agent.post("/verify")
+                        .send({ contracts })
                         .end((err, res) => {
                             chai.expect(err).to.be.null;
-                            chai.expect(res.status).to.equal(400);
-                            chai.expect(res.body.error);
+                            chai.expect(res.status).to.equal(200);
+                            const contracts = res.body.contracts;
+                            chai.expect(contracts).to.have.a.lengthOf(1);
+                            const contract = contracts[0];
+                            chai.expect(contract.status).to.equal("perfect");
+                            chai.expect(res.body.unused).to.be.empty;
+                            done();
+                        });
+            });
+        }).timeout(3000);
+
+        const assertAfterMetadataUpload = (err, res) => {
+            chai.expect(err).to.be.null;
+            chai.expect(res.status).to.equal(200);
+            chai.expect(res.body.unused).to.be.empty;
+
+            const contracts = res.body.contracts;
+            chai.expect(contracts).to.have.a.lengthOf(1);
+            const contract = contracts[0];
+
+            chai.expect(contract.name).to.equal("Storage");
+            chai.expect(contract.status).to.equal("error");
+        }
+
+        it("should not verify when session cookie not stored clientside", (done) => {
+            chai.request(server.app)
+                .post("/files")
+                .attach("files", fs.readFileSync(metadataPath), "metadata.json")
+                .end((err, res) => {
+                    assertAfterMetadataUpload(err, res);
+
+                    chai.request(server.app)
+                        .post("/files")
+                        .attach("files", fs.readFileSync(sourcePath), "1_Storage.sol")
+                        .end((err, res) => {
+                            chai.expect(err).to.be.null;
+                            chai.expect(res.status).to.equal(200);
+
+                            chai.expect(res.body.unused).to.deep.equal(["1_Storage.sol"]);
+                            chai.expect(res.body.contracts).to.be.empty;
                             done();
                         });
                 });
-        });
+        }).timeout(3000);
 
-        it("should fail if too many files uploaded", (done) => {
-            let request = chai.request(server.app)
-                .post("/files")
-            
-            const sourceBuffer = fs.readFileSync(sourcePath);
-            const times = MAX_INPUT_SIZE / sourceBuffer.length + 1;
-            for (let i = 0; i < times; ++i) {
-                request = request.attach("files", sourceBuffer);
+        const assertAllFound = (err, res, finalStatus) => {
+            chai.expect(err).to.be.null;
+            chai.expect(res.status).to.equal(200);
+            chai.expect(res.body.unused).to.be.empty;
+
+            const contracts = res.body.contracts;
+            chai.expect(contracts).to.have.a.lengthOf(1);
+            const contract = contracts[0];
+
+            chai.expect(contract.name).to.equal("Storage");
+            chai.expect(contract.status).to.equal(finalStatus);
+        }
+
+        it("should verify when session cookie stored clientside", (done) => {
+            const agent = chai.request.agent(server.app);
+            agent.post("/files")
+                .attach("files", fs.readFileSync(metadataPath), "metadata.json")
+                .end((err, res) => {
+                    assertAfterMetadataUpload(err, res);
+                    const contracts = res.body.contracts;
+
+                    agent.post("/files")
+                        .attach("files", fs.readFileSync(sourcePath), "1_Storage.sol")
+                        .end((err, res) => {
+                            contracts[0].networkId = contractChain;
+                            contracts[0].address = contractAddress;
+                            assertAllFound(err, res, "error");
+
+                            agent.post("/verify")
+                                .send({ contracts })
+                                .end((err, res) => {
+                                    assertAllFound(err, res, "perfect");
+                                    done();
+                                });
+                        });
+                });
+        }).timeout(3000);
+
+        it("should fail if too many files uploaded, but should succeed after deletion", (done) => {
+            const agent = chai.request.agent(server.app);
+            const arr = [];
+            for (let i = 0; i < MAX_INPUT_SIZE; ++i) {
+                arr.push("a");
             }
-            
-            request.end((err, res) => {
-                chai.expect(err).to.be.null;
-                chai.expect(res.status).to.equal(400);
-                chai.expect(res.body.error);
-                done();
-            }); 
+
+            const file = arr.join("");
+            agent.post("/files")
+                .attach("files", Buffer.from(file))
+                .then(res => {
+                    chai.expect(res.status).to.equal(200);
+
+                    agent.post("/files")
+                        .attach("files", Buffer.from("a"))
+                        .then(res => {
+                            chai.expect(res.status).to.equal(400);
+                            chai.expect(res.body.error);
+
+                            agent.post("/restart-session")
+                                .then(res => {
+                                    chai.expect(res.status).to.equal(200);
+
+                                    agent.post("/files")
+                                        .attach("files", Buffer.from("a"))
+                                        .then(res => {
+                                            chai.expect(res.status).to.equal(200);
+                                            done();
+                                        });
+                                });
+                        });
+                }); 
         });
     });
 });

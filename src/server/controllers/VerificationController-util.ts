@@ -1,9 +1,9 @@
 import { Session } from 'express-session';
-import { PathBuffer, CheckedContract, isEmpty  } from '@ethereum-sourcify/core';
+import { PathContent, CheckedContract, isEmpty  } from '@ethereum-sourcify/core';
 import Web3 from 'web3';
 
-export interface PathBufferMap {
-    [id: string]: PathBuffer;
+export interface PathContentMap {
+    [id: string]: PathContent;
 }
 
 export type ContractLocation = {
@@ -12,11 +12,13 @@ export type ContractLocation = {
 }
 
 export type ContractMeta = {
+    compiledPath?: string,
+    name?: string
     compilerVersion?: string,
     address?: string,
     networkId?: string,
     status?: Status,
-    statusMessage?: string
+    statusMessage?: string,
 }
 
 export type ContractWrapper =
@@ -28,7 +30,7 @@ export interface ContractWrapperMap {
 }
 
 export type SessionMaps = {
-    inputFiles: PathBufferMap;
+    inputFiles: PathContentMap;
     contractWrappers: ContractWrapperMap;
 };
 
@@ -60,13 +62,34 @@ export function isVerifiable(contractWrapper: ContractWrapper) {
         && (contractWrapper.status !== "partial" && contractWrapper.status !== "perfect"); // not already verified
 }
 
+
+
+function getSendableContract(contractWrapper: ContractWrapper, verificationId: string): SendableContract {
+    const contract = contractWrapper.contract;
+    let compilerVersion = undefined;
+    if (contract.metadata.compiler && contract.metadata.compiler.version) {
+        compilerVersion = contract.metadata.compiler.version;
+    }
+
+    return {
+        compiledPath: contract.compiledPath,
+        name: contract.name,
+        compilerVersion,
+        files: {
+            found: Object.keys(contract.solidity),
+            missing: Object.keys(contract.missing).concat(Object.keys(contract.invalid))
+        },
+        verificationId,
+        status: contractWrapper.status || "error",
+        statusMessage: contractWrapper.statusMessage
+    };
+}
+
 export function getSessionJSON(session: MySession) {
     const contractWrappers = session.contractWrappers || {};
     const contracts: SendableContract[] = [];
     for (const id in contractWrappers) {
-        const contractWrapper = contractWrappers[id];
-        const sendableContract: SendableContract = contractWrapper.contract.getSendableJSON();
-        sendableContract.verificationId = id;
+        const sendableContract = getSendableContract(contractWrappers[id], id);
         contracts.push(sendableContract);
     }
 

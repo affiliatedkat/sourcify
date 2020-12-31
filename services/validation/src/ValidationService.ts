@@ -82,7 +82,7 @@ export class ValidationService implements IValidationService {
             const { foundSources, missingSources, invalidSources } = this.rearrangeSources(metadata, byHash);
             const checkedContract = new CheckedContract(metadata, foundSources, missingSources, invalidSources);
             checkedContracts.push(checkedContract);
-            if (!checkedContract.isValid()) {
+            if (!CheckedContract.isValid(checkedContract)) {
                 errorMsgMaterial.push(checkedContract.getInfo());
             }
         });
@@ -138,7 +138,7 @@ export class ValidationService implements IValidationService {
      * @param files the array to be filled with the content of the zip
      */
     private unzip(zippedFile: PathBuffer, files: PathBuffer[]): void {
-        const timestamp = Date.now().toString();
+        const timestamp = Date.now().toString() + "-" + Math.random().toString().slice(2);
         const tmpDir = `tmp-unzipped-${timestamp}`;
 
         new AdmZip(zippedFile.buffer).extractAllTo(tmpDir);

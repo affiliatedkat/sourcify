@@ -107,7 +107,7 @@ if (require.main === module) {
     let invalidContracts = 0;
     checkedContracts.forEach(contract => {
         if (matches(contract, recompilationTarget)) {
-            if (contract.isValid()) {
+            if (CheckedContract.isValid(contract)) {
                 recompilableContracts.push(contract);
             } else {
                 console.log(contract.getInfo());
@@ -116,7 +116,7 @@ if (require.main === module) {
             }
         } else if (recompilationTarget === undefined) {
             let msg = contract.getInfo(); // should be without a trailing newline
-            if (contract.isValid()) {
+            if (CheckedContract.isValid(contract)) {
                 msg += "\n";
                 msg += `  To recompile, use: \`${name} --${OPTION_NAME} ${contract.compiledPath}:${contract.name} ${fileNamesJoint}`;
                 msg += ` | solc --standard-json\``;

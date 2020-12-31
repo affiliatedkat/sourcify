@@ -1,7 +1,7 @@
 import Web3 from 'web3';
 import path from 'path';
 import * as bunyan from 'bunyan';
-import { Match, InputData, getChainByName, getSupportedChains, Logger, FileService, StringMap, cborDecode } from '@ethereum-sourcify/core';
+import { Match, InputData, getChainByName, getSupportedChains, Logger, FileService, StringMap, cborDecode, CheckedContract } from '@ethereum-sourcify/core';
 import { RecompilationResult, getBytecode, recompile, getBytecodeWithoutMetadata as trimMetadata, checkEndpoint } from '../utils';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const multihashes: any = require('multihashes');
@@ -207,7 +207,7 @@ export class Injector {
         
         // target is expected to have been checked in validation (size 1 assertion)
 
-        if (!contract.isValid()) {
+        if (!CheckedContract.isValid(contract)) {
             // eslint-disable-next-line no-useless-catch
             try {
                 await contract.fetchMissing(this.log);

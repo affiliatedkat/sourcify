@@ -2,7 +2,7 @@ import { Request, Response, Router } from 'express';
 import BaseController from './BaseController';
 import { IController } from '../../common/interfaces';
 import { IVerificationService } from '@ethereum-sourcify/verification';
-import { InputData, getChainId, Logger, PathBuffer, CheckedContract, isEmpty } from '@ethereum-sourcify/core';
+import { InputData, getChainId, Logger, PathBuffer, CheckedContract, isEmpty, PathContent, Match } from '@ethereum-sourcify/core';
 import { BadRequestError, NotFoundError } from '../../common/errors'
 import { IValidationService } from '@ethereum-sourcify/validation';
 import * as bunyan from 'bunyan';
@@ -143,7 +143,8 @@ export default class VerificationController extends BaseController implements IC
     private validate = async (session: MySession) => {
         const pathBuffers: PathBuffer[] = [];
         for (const id in session.inputFiles) {
-            pathBuffers.push(session.inputFiles[id]);
+            const pathContent = session.inputFiles[id];
+            pathBuffers.push({ path: pathContent.path, buffer: Buffer.from(pathContent.content) });
         }
         
         try {
@@ -152,7 +153,7 @@ export default class VerificationController extends BaseController implements IC
 
             const newPendingContracts: ContractWrapperMap = {};
             for (const contract of contracts) {
-                newPendingContracts[generateId(contract.metadata)] = {
+                newPendingContracts[generateId(contract.metadataRaw)] = {
                     compilerVersion: contract.compilerVersion,
                     contract
                 }
@@ -201,13 +202,17 @@ export default class VerificationController extends BaseController implements IC
             const inputData: InputData = { addresses: [contractWrapper.address], chain: contractWrapper.networkId, contract: contractWrapper.contract };
 
             // TODO check if address is already verified? be careful not to permanently set the status
-            const matchPromise = this.verificationService.inject(inputData, config.localchain.url); 
-            matchPromise.then(match => {
-                contractWrapper.status = match.status;
-            }).catch(err => {
-                contractWrapper.status = "error";
-                contractWrapper.statusMessage = err.message;
+            const matchPromise = this.verificationService.inject(inputData, config.localchain.url);
+            const match: Match = await matchPromise.catch((error: Error) => {
+                return {
+                    status: null,
+                    address: null,
+                    message: error.message
+                };
             });
+
+            contractWrapper.status = match.status || "error";
+            contractWrapper.statusMessage = match.message;
         }
     }
 
@@ -243,41 +248,55 @@ export default class VerificationController extends BaseController implements IC
         return pathBuffers;
     }
 
-    private saveFiles(pathBuffers: PathBuffer[], session: MySession) {
+    private saveFiles(pathContents: PathContent[], session: MySession) {
         if (!session.inputFiles) {
             session.inputFiles = {};
         }
         
         let inputSize = 0; // shall contain old buffer size + new files size
         for (const id in session.inputFiles) {
-            const pb = session.inputFiles[id];
-            inputSize += pb.buffer.length;
+            const pc = session.inputFiles[id];
+            inputSize += pc.content.length;
         }
 
-        pathBuffers.forEach(pb => inputSize += pb.buffer.length);
+        pathContents.forEach(pc => inputSize += pc.content.length);
 
         if (inputSize > VerificationController.MAX_INPUT_SIZE) {
             const msg = "Too much session memory used. Delete some files or restart the session";
             throw new BadRequestError(msg); // TODO 413 Payload Too Large
         }
 
-        pathBuffers.forEach(pb => {
-            session.inputFiles[generateId(pb.buffer)] = pb;
+        pathContents.forEach(pc => {
+            session.inputFiles[generateId(pc.content)] = pc;
         });
     }
 
     private addInputFilesEndpoint = async (req: Request, res: Response) => {
         const pathBuffers = this.extractFiles(req);
-        if (!pathBuffers) {
+        const pathContents: PathContent[] = pathBuffers.map(pb => {
+            return { path: pb.path, content: pb.buffer.toString() }
+        });
+
+        if (!pathContents) {
             throw new BadRequestError("No files provided");
         }
         const session = (req.session as MySession);
-        this.saveFiles(pathBuffers, session);
+        this.saveFiles(pathContents, session);
         this.validate(session);
-        const toVerify: ContractWrapperMap = {};
-        for (const id of (req.body.ids || [])) {
-            toVerify[id] = session.contractWrappers[id];
+
+        let toVerify: ContractWrapperMap = {};
+        if (!req.body.verificationIds) {
+            toVerify = session.contractWrappers;
+        } else {
+            const verificationIds = req.body.verificationIds;
+            if (!Array.isArray(verificationIds)) {
+                throw new BadRequestError("verificationIds should be an Array");
+            }
+            for (const id of req.body.verificationIds) {
+                toVerify[id] = session.contractWrappers[id];
+            }
         }
+
         await this.verifyValidated(toVerify);
         res.send(getSessionJSON(session));
     }

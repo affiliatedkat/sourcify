@@ -15,6 +15,9 @@ const IPFS_PREFIX = "dweb:/ipfs/";
  * The getInfo method returns the information about compilation or errors encountered while validating the metadata.
  */
 export class CheckedContract {
+    /** The raw string representation of the contract's metadata. */
+    metadataRaw: string;
+
     /** Object containing contract metadata keys and values. */
     metadata: Metadata;
 
@@ -42,8 +45,8 @@ export class CheckedContract {
     /** Checks whether this contract is valid or not.
      * @returns true if no sources are missing or are invalid (malformed); false otherwise
      */
-    public isValid(): boolean {
-        return isEmpty(this.missing) && isEmpty(this.invalid);
+    public static isValid(contract: CheckedContract): boolean {
+        return isEmpty(contract.missing) && isEmpty(contract.invalid);
     }
 
     private sourceMapToStringMap(input: SourceMap) {
@@ -55,6 +58,7 @@ export class CheckedContract {
     }
 
     public constructor(metadata: any, solidity: SourceMap, missing: any, invalid: StringMap) {
+        this.metadataRaw = JSON.stringify(metadata);
         this.metadata = JSON.parse(JSON.stringify(metadata));
         this.solidity = this.sourceMapToStringMap(solidity);
         this.missing = missing;
@@ -112,22 +116,6 @@ export class CheckedContract {
         }
 
         return standardJson;
-    }
-
-    public getSendableJSON() {
-        let compilerVersion = undefined;
-        if (this.metadata.compiler && this.metadata.compiler.version) {
-            compilerVersion = this.metadata.compiler.version;
-        }
-        return {
-            compiledPath: this.compiledPath,
-            name: this.name,
-            compilerVersion,
-            files: {
-                found: Object.keys(this.solidity),
-                missing: Object.keys(this.missing).concat(Object.keys(this.invalid))
-            }
-        };
     }
 
     /**
@@ -274,6 +262,6 @@ export class CheckedContract {
      * @returns the validation info message
      */
     public getInfo() {
-        return this.isValid() ? this.composeSuccessMessage() : this.composeErrorMessage();
+        return CheckedContract.isValid(this) ? this.composeSuccessMessage() : this.composeErrorMessage();
     }
 }
