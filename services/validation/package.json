@@ -32,7 +32,7 @@
   },
   "dependencies": {
     "@types/adm-zip": "^0.4.33",
-    "adm-zip": "^0.4.16",
+    "adm-zip": "^0.5.2",
     "bunyan": "^1.8.14",
     "commander": "^6.1.0",
     "@ethereum-sourcify/core": "*",
