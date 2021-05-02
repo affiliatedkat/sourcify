@@ -1,4 +1,4 @@
-FROM node:10
+FROM node:current-buster-slim
 
 WORKDIR /home/app
 RUN npm install -g lerna
